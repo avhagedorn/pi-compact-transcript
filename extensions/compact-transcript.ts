@@ -119,7 +119,29 @@ function resultPreview(result: any): string {
 	return `${lines.length} lines`;
 }
 
-async function patchAssistantThinkingRenderer() {
+function toolCallName(block: any): string {
+	return block?.name ?? block?.toolName ?? block?.tool_name ?? block?.tool?.name ?? "tool";
+}
+
+function toolCallArgs(block: any): any {
+	return block?.args ?? block?.input ?? block?.arguments ?? block?.tool?.args ?? {};
+}
+
+function nextStepSummary(content: any[], fromIndex: number): string {
+	const tools = content.slice(fromIndex + 1).filter((c: any) => c?.type === "toolCall");
+	if (tools.length === 0) return " Next, I’ll continue from this reasoning and respond with the result. I’ll keep the visible output brief.";
+
+	const first = tools[0];
+	const preview = limitPlain(previewFor(toolCallName(first), toolCallArgs(first)), 90);
+	if (tools.length === 1) {
+		return ` Next, I’ll use ${preview}. I’ll inspect the result and decide the next visible step from there.`;
+	}
+	const last = tools[tools.length - 1];
+	const lastPreview = limitPlain(previewFor(toolCallName(last), toolCallArgs(last)), 70);
+	return ` Next, I’ll run ${tools.length} tool calls, starting with ${preview}. I’ll use the latest result to continue, ending this batch around ${lastPreview}.`;
+}
+
+async function patchInternalRenderers() {
 	try {
 		const require = createRequire(import.meta.url);
 		const piMain = require.resolve("@earendil-works/pi-coding-agent");
@@ -127,7 +149,33 @@ async function patchAssistantThinkingRenderer() {
 		const assistantModule = await import(
 			pathToFileURL(join(distDir, "modes/interactive/components/assistant-message.js")).href
 		);
+		const toolExecutionModule = await import(
+			pathToFileURL(join(distDir, "modes/interactive/components/tool-execution.js")).href
+		);
 		const themeModule = await import(pathToFileURL(join(distDir, "modes/interactive/theme/theme.js")).href);
+
+		const ToolExecutionComponent = toolExecutionModule.ToolExecutionComponent;
+		if (ToolExecutionComponent?.prototype && !ToolExecutionComponent.prototype.__compactTranscriptPatched) {
+			const originalRender = ToolExecutionComponent.prototype.render;
+			ToolExecutionComponent.prototype.render = function (width: number) {
+				if (this.hideComponent) return [];
+				if (this.hasRendererDefinition?.() && this.getRenderShell?.() === "self") {
+					const contentLines = this.selfRenderContainer.render(width);
+					if (contentLines.length === 0 && this.imageComponents.length === 0) return [];
+					const lines = [...contentLines];
+					for (let i = 0; i < this.imageComponents.length; i++) {
+						const spacer = this.imageSpacers[i];
+						if (spacer) lines.push(...spacer.render(width));
+						const imageComponent = this.imageComponents[i];
+						if (imageComponent) lines.push(...imageComponent.render(width));
+					}
+					return lines;
+				}
+				return originalRender.call(this, width);
+			};
+			ToolExecutionComponent.prototype.__compactTranscriptPatched = true;
+		}
+
 		const Component = assistantModule.AssistantMessageComponent;
 		if (!Component?.prototype || Component.prototype.__compactTranscriptPatched) return;
 		const original = Component.prototype.updateContent;
@@ -161,8 +209,9 @@ async function patchAssistantThinkingRenderer() {
 				i += count - 1;
 
 				const label = count > 1 ? `${LABEL} (${count}x)` : LABEL;
+				const summary = nextStepSummary(message.content, i);
 				this.contentContainer.addChild(
-					new Text(themeModule.theme.italic(themeModule.theme.fg("thinkingText", label)), this.outputPad, 0),
+					new Text(themeModule.theme.italic(themeModule.theme.fg("thinkingText", limitPlain(`${label}${summary}`))), this.outputPad, 0),
 				);
 
 				const hasVisibleAfter = message.content
@@ -180,7 +229,7 @@ async function patchAssistantThinkingRenderer() {
 }
 
 export default async function (pi: ExtensionAPI) {
-	await patchAssistantThinkingRenderer();
+	await patchInternalRenderers();
 	let current: ToolInfo[] = [];
 	let byId = new Map<string, ToolInfo>();
 	let consecutiveThinking = 0;
@@ -203,8 +252,11 @@ export default async function (pi: ExtensionAPI) {
 		ctx.ui.setWorkingMessage(LABEL);
 	});
 
-	pi.on("turn_start", (_event, ctx) => {
+	pi.on("agent_start", () => {
 		resetTools();
+	});
+
+	pi.on("turn_start", (_event, ctx) => {
 		consecutiveThinking = 0;
 		applyThinkingLabel(ctx);
 	});
@@ -219,6 +271,7 @@ export default async function (pi: ExtensionAPI) {
 		if (type && !type.startsWith("thinking_")) {
 			consecutiveThinking = 0;
 			applyThinkingLabel(ctx);
+			if (type === "text_delta" || type === "text_start") resetTools();
 		}
 	});
 
