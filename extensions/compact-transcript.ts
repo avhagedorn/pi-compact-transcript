@@ -28,6 +28,9 @@ type ToolInfo = {
 const BUILT_INS: BuiltInName[] = ["bash", "read", "write", "edit", "grep", "find", "ls"];
 const LABEL = "Thinking...";
 
+let currentTools: ToolInfo[] = [];
+let toolsById = new Map<string, ToolInfo>();
+
 const toolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
 
 function createBuiltInTools(cwd: string) {
@@ -127,6 +130,38 @@ function toolCallArgs(block: any): any {
 	return block?.args ?? block?.input ?? block?.arguments ?? block?.tool?.args ?? {};
 }
 
+function resetToolRun() {
+	currentTools = [];
+	toolsById = new Map();
+}
+
+function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
+	let info = toolsById.get(id);
+	if (!info) {
+		info = { id, name, args, preview: previewFor(name, args) };
+		toolsById.set(id, info);
+		if (!currentTools.some((tool) => tool.id === id)) currentTools.push(info);
+	}
+	info.name = name;
+	info.args = args;
+	info.preview = previewFor(name, args);
+	if (invalidate) info.invalidate = invalidate;
+	return info;
+}
+
+function compactToolLine(toolCallId: string, name: string, args: any, theme: any, invalidate?: () => void, result?: any): string {
+	const info = upsertToolInfo(toolCallId, name, args, invalidate);
+	const suffix = resultPreview(result);
+	if (suffix) info.result = suffix;
+
+	if (currentTools[currentTools.length - 1]?.id !== toolCallId) return "";
+
+	const details = info.result ? `${info.preview} {${oneLine(info.result)}}` : info.preview;
+	if (currentTools.length === 1) return theme.fg("muted", limitPlain(details));
+	const prefix = `Used ${currentTools.length} tools `;
+	return theme.fg("toolTitle", prefix) + theme.fg("muted", limitPlain(details, Math.max(20, (process.stdout.columns || 100) - prefix.length - 6)));
+}
+
 function nextStepSummary(content: any[], fromIndex: number): string {
 	const tools = content.slice(fromIndex + 1).filter((c: any) => c?.type === "toolCall");
 	if (tools.length === 0) return " Next, I’ll continue from this reasoning and respond with the result. I’ll keep the visible output brief.";
@@ -157,20 +192,35 @@ async function patchInternalRenderers() {
 		const ToolExecutionComponent = toolExecutionModule.ToolExecutionComponent;
 		if (ToolExecutionComponent?.prototype && !ToolExecutionComponent.prototype.__compactTranscriptPatched) {
 			const originalRender = ToolExecutionComponent.prototype.render;
+			ToolExecutionComponent.prototype.updateDisplay = function () {
+				this.__compactTranscriptForceSelf = true;
+				this.hideComponent = false;
+				this.selfRenderContainer.clear();
+				this.imageComponents = [];
+				this.imageSpacers = [];
+
+				const line = compactToolLine(
+					this.toolCallId,
+					this.toolName,
+					this.args,
+					themeModule.theme,
+					() => {
+						this.invalidate();
+						this.ui?.requestRender?.();
+					},
+					this.result,
+				);
+
+				if (!line) {
+					this.hideComponent = true;
+					return;
+				}
+
+				this.selfRenderContainer.addChild(new Text(line, 0, 0));
+			};
 			ToolExecutionComponent.prototype.render = function (width: number) {
 				if (this.hideComponent) return [];
-				if (this.hasRendererDefinition?.() && this.getRenderShell?.() === "self") {
-					const contentLines = this.selfRenderContainer.render(width);
-					if (contentLines.length === 0 && this.imageComponents.length === 0) return [];
-					const lines = [...contentLines];
-					for (let i = 0; i < this.imageComponents.length; i++) {
-						const spacer = this.imageSpacers[i];
-						if (spacer) lines.push(...spacer.render(width));
-						const imageComponent = this.imageComponents[i];
-						if (imageComponent) lines.push(...imageComponent.render(width));
-					}
-					return lines;
-				}
+				if (this.__compactTranscriptForceSelf) return this.selfRenderContainer.render(width);
 				return originalRender.call(this, width);
 			};
 			ToolExecutionComponent.prototype.__compactTranscriptPatched = true;
@@ -230,8 +280,6 @@ async function patchInternalRenderers() {
 
 export default async function (pi: ExtensionAPI) {
 	await patchInternalRenderers();
-	let current: ToolInfo[] = [];
-	let byId = new Map<string, ToolInfo>();
 	let consecutiveThinking = 0;
 
 	function thinkingLabel() {
@@ -239,8 +287,7 @@ export default async function (pi: ExtensionAPI) {
 	}
 
 	function resetTools() {
-		current = [];
-		byId = new Map();
+		resetToolRun();
 	}
 
 	function applyThinkingLabel(ctx: ExtensionContext) {
@@ -276,44 +323,18 @@ export default async function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", (event: any) => {
-		const previous = current[current.length - 1];
-		const info: ToolInfo = {
-			id: event.toolCallId,
-			name: event.toolName,
-			args: event.args,
-			preview: previewFor(event.toolName, event.args),
-		};
-		current.push(info);
-		byId.set(info.id, info);
+		const previous = currentTools[currentTools.length - 1];
+		upsertToolInfo(event.toolCallId, event.toolName, event.args);
 		previous?.invalidate?.();
 	});
 
 	pi.on("tool_execution_end", (event: any) => {
-		const info = byId.get(event.toolCallId);
+		const info = toolsById.get(event.toolCallId);
 		if (!info) return;
 		const suffix = resultPreview(event.result);
 		if (suffix) info.result = suffix;
 		info.invalidate?.();
 	});
-
-	function compactLine(toolCallId: string, name: string, args: any, theme: any, context: any): string {
-		let info = byId.get(toolCallId);
-		if (!info) {
-			info = { id: toolCallId, name, args, preview: previewFor(name, args) };
-			byId.set(toolCallId, info);
-			if (!current.some((t) => t.id === toolCallId)) current.push(info);
-		}
-		info.invalidate = context.invalidate;
-		info.args = args;
-		info.preview = previewFor(name, args);
-
-		if (current[current.length - 1]?.id !== toolCallId) return "";
-
-		const details = info.result ? `${info.preview} {${oneLine(info.result)}}` : info.preview;
-		if (current.length === 1) return theme.fg("muted", limitPlain(details));
-		const prefix = `Used ${current.length} tools `;
-		return theme.fg("toolTitle", prefix) + theme.fg("muted", limitPlain(details, Math.max(20, (process.stdout.columns || 100) - prefix.length - 6)));
-	}
 
 	for (const name of BUILT_INS) {
 		const base = getBuiltInTools(process.cwd())[name] as any;
@@ -328,7 +349,7 @@ export default async function (pi: ExtensionAPI) {
 			},
 			renderCall(args: any, theme: any, context: any) {
 				const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-				text.setText(compactLine(context.toolCallId, name, args, theme, context));
+				text.setText(compactToolLine(context.toolCallId, name, args, theme, context.invalidate));
 				return text;
 			},
 			renderResult(_result: any, _options: any, _theme: any, _context: any) {
