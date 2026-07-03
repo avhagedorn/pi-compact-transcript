@@ -1,0 +1,38 @@
+{
+  "name": "pi-compact-transcript",
+  "version": "0.1.0",
+  "description": "A compact transcript extension for pi: collapsed thinking and one-line tool previews.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Alan Hagedorn <avhagedorn@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/avhagedorn/pi-compact-transcript.git"
+  },
+  "bugs": {
+    "url": "https://github.com/avhagedorn/pi-compact-transcript/issues"
+  },
+  "homepage": "https://github.com/avhagedorn/pi-compact-transcript#readme",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "pi-extension",
+    "transcript",
+    "terminal"
+  ],
+  "pi": {
+    "extensions": ["./extensions/compact-transcript.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}
