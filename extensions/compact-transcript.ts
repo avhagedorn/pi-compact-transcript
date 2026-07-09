@@ -36,6 +36,8 @@ const LABEL = "Thinking...";
 let toolsById = new Map<string, ToolInfo>();
 let currentNoiseBurst: ToolInfo[] = [];
 let agentActive = false;
+let lastThinkingSignalComponent: any | undefined;
+let thinkingSignalCount = 0;
 
 const toolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
 
@@ -135,6 +137,11 @@ function isMutationTool(name: string): boolean {
 function resetToolRun() {
 	toolsById = new Map();
 	currentNoiseBurst = [];
+}
+
+function resetThinkingSignals() {
+	lastThinkingSignalComponent = undefined;
+	thinkingSignalCount = 0;
 }
 
 function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
@@ -251,11 +258,33 @@ async function patchInternalRenderers() {
 			this.lastMessage = message;
 			this.contentContainer.clear();
 
+			const hasText = message.content.some((c: any) => c.type === "text" && c.text?.trim());
+			const hasThinking = message.content.some((c: any) => c.type === "thinking" && c.thinking?.trim());
+			this.hasToolCalls = message.content.some((c: any) => c.type === "toolCall");
+
+			// During live runs, coalesce consecutive assistant messages that only
+			// contribute hidden thinking (with or without tool calls). Tool rows are
+			// separate components, so hiding the older assistant component removes only
+			// repeated "Thinking..." noise, not the tool preview itself.
+			const thinkingSignal = agentActive && hasThinking && !hasText;
+			if (this.__compactTranscriptHiddenThinkingSignal) return;
+			if (thinkingSignal && lastThinkingSignalComponent !== this) {
+				if (lastThinkingSignalComponent) {
+					lastThinkingSignalComponent.__compactTranscriptHiddenThinkingSignal = true;
+					lastThinkingSignalComponent.invalidate?.();
+				}
+				lastThinkingSignalComponent = this;
+				thinkingSignalCount++;
+			} else if (!thinkingSignal && hasText) {
+				resetThinkingSignals();
+			}
+
 			const visible = message.content.filter(
 				(c: any) => (c.type === "text" && c.text?.trim()) || (c.type === "thinking" && c.thinking?.trim()),
 			);
 			if (visible.length) this.contentContainer.addChild(new Spacer(1));
 
+			let renderedThinkingSignal = false;
 			for (let i = 0; i < message.content.length; i++) {
 				const content = message.content[i];
 				if (content.type === "text" && content.text?.trim()) {
@@ -273,6 +302,12 @@ async function patchInternalRenderers() {
 				}
 				i += count - 1;
 
+				if (thinkingSignal) {
+					if (renderedThinkingSignal) continue;
+					count = Math.max(count, thinkingSignalCount);
+					renderedThinkingSignal = true;
+				}
+
 				const label = count > 1 ? `${LABEL} (${count}x)` : LABEL;
 				this.contentContainer.addChild(
 					new Text(themeModule.theme.italic(themeModule.theme.fg("thinkingText", label)), this.outputPad, 0),
@@ -283,8 +318,6 @@ async function patchInternalRenderers() {
 					.some((c: any) => (c.type === "text" && c.text?.trim()) || (c.type === "thinking" && c.thinking?.trim()));
 				if (hasVisibleAfter) this.contentContainer.addChild(new Spacer(1));
 			}
-
-			this.hasToolCalls = message.content.some((c: any) => c.type === "toolCall");
 		};
 		Component.prototype.__compactTranscriptPatched = true;
 	} catch {
@@ -316,11 +349,13 @@ export default async function (pi: ExtensionAPI) {
 	pi.on("agent_start", () => {
 		agentActive = true;
 		resetTools();
+		resetThinkingSignals();
 	});
 
 	pi.on("agent_end", () => {
 		agentActive = false;
 		currentNoiseBurst = [];
+		resetThinkingSignals();
 	});
 
 	pi.on("turn_start", (_event, ctx) => {
@@ -338,7 +373,10 @@ export default async function (pi: ExtensionAPI) {
 		if (type && !type.startsWith("thinking_")) {
 			consecutiveThinking = 0;
 			applyThinkingLabel(ctx);
-			if (type === "text_delta" || type === "text_start") resetTools();
+			if (type === "text_delta" || type === "text_start") {
+				resetTools();
+				resetThinkingSignals();
+			}
 		}
 	});
 
