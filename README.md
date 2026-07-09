@@ -64,16 +64,18 @@ Set these in `~/.pi/agent/settings.json`, or use `/settings` in pi.
 /compact-transcript template <tool|/regex/> <template|clear>
 ```
 
-In interactive pi, `/compact-transcript` opens a focused settings-style panel in the editor area instead of writing status text into the transcript or footer. Press `Enter`/`Space` to toggle values, edit list/template rows inline, and `Esc` to close it.
+In interactive pi, `/compact-transcript` opens a focused settings-style panel in the editor area. Press `Enter`/`Space` to toggle values, edit list/template rows inline, and `Esc` to close it.
 
 Modes:
 
 - `balanced` (default): compact non-mutating bursts, keep mutations/failures visible, and preserve normal hidden-thinking markers.
-- `aggressive`: shorter previews, custom tool compaction enabled, and coalesced thinking-only markers.
+- `aggressive`: shorter previews and coalesced thinking-only markers.
 - `debug`: compact rows but do not hide earlier burst rows; useful when tuning rules.
-- `disabled`: fully disable compact-transcript rendering for future rows and clear any compact-transcript footer status. (`off` is accepted as a legacy alias.)
+- `disabled`: fully disable compact-transcript rendering for future rows. (`off` is accepted as a legacy alias.)
 
-Preview templates support `{name}`, `{args}`, top-level argument names like `{path}` and `{command}`, and nested fields like `{arg.query.text}`. In the panel, edit templates as semicolon-separated `tool=template` pairs.
+Switching modes never changes the other toggles (custom tools, failed tools, bash anchors); those are independent settings.
+
+Preview templates support `{name}`, `{args}`, top-level argument names like `{path}` and `{command}`, and nested fields like `{arg.query.text}`. In the panel, edit templates as semicolon-separated `tool=template` pairs, so template text itself cannot contain `;`.
 
 Examples:
 

@@ -3,14 +3,25 @@ import { AssistantMessageComponent, getSettingsListTheme, ToolExecutionComponent
 import { Container, Input, Markdown, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 
-const PATCH_VERSION = "0.4.0";
 const LABEL = "Thinking...";
+// Older versions of this extension wrote a footer status under this key; it is
+// kept only to clear that status once per session for users upgrading in place.
 const STATUS_KEY = "compact-transcript";
 const CONFIG_ENTRY_TYPE = "compact-transcript-config";
 
 const BUILT_INS = new Set(["bash", "read", "write", "edit", "grep", "find", "ls"]);
 
-type Mode = "disabled" | "off" | "balanced" | "aggressive" | "debug";
+const MIN_PREVIEW_WIDTH = 20;
+const AGGRESSIVE_PREVIEW_WIDTH = 72;
+const DEBUG_PREVIEW_WIDTH = 140;
+const DEFAULT_PREVIEW_WIDTH = 104;
+// Leave room for pi's row gutter/padding so compact lines never wrap.
+const PREVIEW_MARGIN = 6;
+const SETTINGS_LIST_HEIGHT = 9;
+
+type Mode = "disabled" | "balanced" | "aggressive" | "debug";
+// "off" is a legacy alias for "disabled" accepted from commands and persisted config.
+type ModeInput = Mode | "off";
 type ToolKind = "always" | "mutation" | "noise";
 
 type CompactTranscriptConfig = {
@@ -18,7 +29,6 @@ type CompactTranscriptConfig = {
 	compactCustomTools: boolean;
 	showFailedTools: boolean;
 	showBashMutations: boolean;
-	status: boolean;
 	alwaysShowTools: string[];
 	mutationTools: string[];
 	previewTemplates: Record<string, string>;
@@ -47,7 +57,6 @@ type RuntimeState = {
 	lastThinkingSignalComponent?: any;
 	thinkingSignalCount: number;
 	consecutiveThinking: number;
-	ui?: ExtensionContext["ui"];
 	currentTheme?: Theme;
 };
 
@@ -56,7 +65,6 @@ const DEFAULT_CONFIG: CompactTranscriptConfig = {
 	compactCustomTools: true,
 	showFailedTools: true,
 	showBashMutations: true,
-	status: false,
 	alwaysShowTools: [],
 	mutationTools: [],
 	previewTemplates: {},
@@ -72,7 +80,6 @@ function cloneConfig(config: CompactTranscriptConfig): CompactTranscriptConfig {
 		compactCustomTools: config.compactCustomTools,
 		showFailedTools: config.showFailedTools,
 		showBashMutations: config.showBashMutations,
-		status: config.status,
 		alwaysShowTools: [...config.alwaysShowTools],
 		mutationTools: [...config.mutationTools],
 		previewTemplates: { ...config.previewTemplates },
@@ -80,22 +87,21 @@ function cloneConfig(config: CompactTranscriptConfig): CompactTranscriptConfig {
 }
 
 function normalizeConfig(input: unknown): CompactTranscriptConfig {
-	const source = (input && typeof input === "object" ? input : {}) as Partial<CompactTranscriptConfig>;
+	const source = (input && typeof input === "object" ? input : {}) as Partial<
+		Omit<CompactTranscriptConfig, "mode"> & { mode: ModeInput }
+	>;
 	const rawMode = source.mode;
-	const mode =
+	const mode: Mode =
 		rawMode === "off" || rawMode === "disabled"
 			? "disabled"
 			: rawMode === "aggressive" || rawMode === "debug"
 				? rawMode
 				: "balanced";
 	return {
-		...cloneConfig(DEFAULT_CONFIG),
-		...source,
 		mode,
-		compactCustomTools: source.compactCustomTools ?? DEFAULT_CONFIG.compactCustomTools,
-		showFailedTools: source.showFailedTools ?? DEFAULT_CONFIG.showFailedTools,
-		showBashMutations: source.showBashMutations ?? DEFAULT_CONFIG.showBashMutations,
-		status: source.status ?? DEFAULT_CONFIG.status,
+		compactCustomTools: typeof source.compactCustomTools === "boolean" ? source.compactCustomTools : DEFAULT_CONFIG.compactCustomTools,
+		showFailedTools: typeof source.showFailedTools === "boolean" ? source.showFailedTools : DEFAULT_CONFIG.showFailedTools,
+		showBashMutations: typeof source.showBashMutations === "boolean" ? source.showBashMutations : DEFAULT_CONFIG.showBashMutations,
 		alwaysShowTools: Array.isArray(source.alwaysShowTools) ? source.alwaysShowTools.filter(isNonEmptyString) : [],
 		mutationTools: Array.isArray(source.mutationTools) ? source.mutationTools.filter(isNonEmptyString) : [],
 		previewTemplates:
@@ -126,7 +132,7 @@ function getState(): RuntimeState {
 const state = getState();
 
 function isEnabled(): boolean {
-	return state.config.mode !== "disabled" && state.config.mode !== "off";
+	return state.config.mode !== "disabled";
 }
 
 function isDebugMode(): boolean {
@@ -150,8 +156,13 @@ function oneLine(value: unknown): string {
 }
 
 function previewWidth(base = process.stdout.columns || 100): number {
-	const modeMax = state.config.mode === "aggressive" ? 72 : state.config.mode === "debug" ? 140 : 104;
-	return Math.max(20, Math.min(modeMax, base - 6));
+	const modeMax =
+		state.config.mode === "aggressive"
+			? AGGRESSIVE_PREVIEW_WIDTH
+			: state.config.mode === "debug"
+				? DEBUG_PREVIEW_WIDTH
+				: DEFAULT_PREVIEW_WIDTH;
+	return Math.max(MIN_PREVIEW_WIDTH, Math.min(modeMax, base - PREVIEW_MARGIN));
 }
 
 function limitPlain(text: string, max = previewWidth()): string {
@@ -317,7 +328,6 @@ function resetToolRun() {
 	state.toolsById = new Map();
 	state.currentNoiseBurst = [];
 	state.hiddenToolIds = new Set();
-	updateStatus();
 }
 
 function resetThinkingSignals() {
@@ -325,22 +335,23 @@ function resetThinkingSignals() {
 	state.thinkingSignalCount = 0;
 }
 
-function updateStatus(ctx?: ExtensionContext) {
-	if (ctx) {
-		state.ui = ctx.ui;
-		state.currentTheme = ctx.ui.theme;
-	}
-	// Compact transcript no longer occupies Pi's footer/status line. Keep this
-	// helper as a centralized cleanup point for users who have older persisted
-	// config entries with status enabled.
-	state.ui?.setStatus(STATUS_KEY, undefined);
+function captureTheme(ctx: ExtensionContext) {
+	state.currentTheme = ctx.ui.theme;
 }
 
 function setToolHidden(info: ToolInfo, hidden: boolean) {
 	info.hidden = hidden;
 	if (hidden) state.hiddenToolIds.add(info.id);
 	else state.hiddenToolIds.delete(info.id);
-	updateStatus();
+}
+
+function applyResult(info: ToolInfo, result: any, isError: boolean, isPartial: boolean) {
+	const suffix = resultPreview(result, isPartial);
+	if (suffix) info.result = suffix;
+	if (isError) {
+		info.isError = true;
+		setToolHidden(info, false);
+	}
 }
 
 function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
@@ -383,12 +394,7 @@ function beginTool(id: string, name: string, args: any) {
 function updateToolResult(toolCallId: string, result: any, isError = false, isPartial = false) {
 	const info = state.toolsById.get(toolCallId);
 	if (!info) return;
-	const suffix = resultPreview(result, isPartial);
-	if (suffix) info.result = suffix;
-	if (isError) {
-		info.isError = true;
-		setToolHidden(info, false);
-	}
+	applyResult(info, result, isError, isPartial);
 	info.invalidate?.();
 }
 
@@ -410,16 +416,12 @@ function compactToolLine(
 		const suffix = resultPreview(result, isPartial);
 		const preview = previewFor(name, args);
 		const details = suffix ? `${preview} {${oneLine(suffix)}}` : preview;
-		return theme.fg("muted", limitPlain(details));
+		const marker = classifyTool(name, args) === "mutation" ? theme.fg("warning", "◆ ") : "";
+		return marker + theme.fg("muted", limitPlain(details));
 	}
 
 	info = upsertToolInfo(toolCallId, name, args, invalidate);
-	const suffix = resultPreview(result, isPartial);
-	if (suffix) info.result = suffix;
-	if (isError) {
-		info.isError = true;
-		setToolHidden(info, false);
-	}
+	applyResult(info, result, isError, isPartial);
 	if (info.hidden) return "";
 
 	const status = info.result ? ` {${oneLine(info.result)}}` : isPartial ? " {running}" : "";
@@ -467,10 +469,7 @@ function patchToolExecutionComponent() {
 			this.ui?.requestRender?.();
 		};
 		const info = upsertToolInfo(this.toolCallId, this.toolName, this.args, invalidate);
-		if (this.result?.isError) {
-			info.isError = true;
-			setToolHidden(info, false);
-		}
+		applyResult(info, this.result, this.result?.isError ?? false, this.isPartial);
 
 		if (shouldUseOriginalToolRow(this, info)) {
 			setToolHidden(info, false);
@@ -517,7 +516,7 @@ function patchToolExecutionComponent() {
 		return originalRender.call(this, width);
 	};
 
-	proto[TOOL_PATCH_KEY] = { version: PATCH_VERSION, originalUpdateDisplay, originalRender };
+	proto[TOOL_PATCH_KEY] = { originalUpdateDisplay, originalRender };
 }
 
 function patchAssistantMessageComponent() {
@@ -606,7 +605,7 @@ function patchAssistantMessageComponent() {
 		}
 	};
 
-	proto[ASSISTANT_PATCH_KEY] = { version: PATCH_VERSION, originalUpdateContent };
+	proto[ASSISTANT_PATCH_KEY] = { originalUpdateContent };
 }
 
 function patchRenderers() {
@@ -710,17 +709,10 @@ function commandHelp(): string {
 	].join("\n");
 }
 
-function setMode(mode: Mode) {
+// Mode only selects the rendering style; it must not silently rewrite the
+// user's other toggles, or switching modes becomes destructive.
+function setMode(mode: ModeInput) {
 	state.config.mode = mode === "off" ? "disabled" : mode;
-	if (mode === "aggressive") {
-		state.config.compactCustomTools = true;
-		state.config.showFailedTools = true;
-		state.config.showBashMutations = true;
-	}
-	if (mode === "debug") {
-		state.config.compactCustomTools = true;
-		state.config.showFailedTools = true;
-	}
 }
 
 function onOff(value: boolean): "on" | "off" {
@@ -769,7 +761,7 @@ function buildSettingsItems(): SettingItem[] {
 			currentValue: state.config.mode,
 			values: ["balanced", "aggressive", "debug", "disabled"],
 			description:
-				"balanced compacts normal tool bursts; aggressive uses shorter previews; debug keeps rows visible while tuning; disabled turns compact-transcript rendering and footer status off.",
+				"balanced compacts normal tool bursts; aggressive uses shorter previews; debug keeps rows visible while tuning; disabled turns compact-transcript rendering off.",
 		},
 		{
 			id: "customTools",
@@ -828,7 +820,7 @@ function buildSettingsItems(): SettingItem[] {
 					"Preview templates",
 					formatTemplatesInput(),
 					done,
-					"Use tool=template; /regex/=template. Placeholders: {name}, {args}, {path}, {command}, {arg.foo}.",
+					"Use tool=template; /regex/=template. Placeholders: {name}, {args}, {path}, {command}, {arg.foo}. `;` separates pairs, so templates cannot contain it.",
 				),
 		},
 		{
@@ -844,7 +836,7 @@ function buildSettingsItems(): SettingItem[] {
 function applySettingsItem(id: string, value: string, pi: ExtensionAPI, ctx: ExtensionContext) {
 	switch (id) {
 		case "mode":
-			setMode(value as Mode);
+			setMode(value as ModeInput);
 			break;
 		case "customTools":
 			state.config.compactCustomTools = value === "on";
@@ -872,7 +864,6 @@ function applySettingsItem(id: string, value: string, pi: ExtensionAPI, ctx: Ext
 	}
 	persistConfig(pi);
 	applyThinkingLabel(ctx);
-	updateStatus(ctx);
 }
 
 async function showSettingsPanel(pi: ExtensionAPI, ctx: ExtensionContext): Promise<void> {
@@ -892,7 +883,7 @@ async function showSettingsPanel(pi: ExtensionAPI, ctx: ExtensionContext): Promi
 
 		settingsList = new SettingsList(
 			buildSettingsItems(),
-			9,
+			SETTINGS_LIST_HEIGHT,
 			getSettingsListTheme(),
 			(id, value) => {
 				applySettingsItem(id, value, pi, ctx);
@@ -953,9 +944,13 @@ function registerCommand(pi: ExtensionAPI) {
 				.map((value) => ({ value, label: value }));
 		},
 		handler: async (args, ctx) => {
+			captureTheme(ctx);
 			const trimmed = args.trim();
+			if (trimmed === "help" && ctx.mode !== "tui") {
+				ctx.ui.notify(commandHelp(), "info");
+				return;
+			}
 			if (!trimmed || trimmed === "status" || trimmed === "help") {
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
@@ -963,15 +958,13 @@ function registerCommand(pi: ExtensionAPI) {
 				state.config = cloneConfig(DEFAULT_CONFIG);
 				persistConfig(pi);
 				applyThinkingLabel(ctx);
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
 			if (["disabled", "off", "balanced", "aggressive", "debug"].includes(trimmed)) {
-				setMode(trimmed as Mode);
+				setMode(trimmed as ModeInput);
 				persistConfig(pi);
 				applyThinkingLabel(ctx);
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
@@ -988,46 +981,38 @@ function registerCommand(pi: ExtensionAPI) {
 				if (command === "failed") state.config.showFailedTools = value;
 				if (command === "bash-mutations") state.config.showBashMutations = value;
 				persistConfig(pi);
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
 
 			if (command === "always-show" || command === "mutation-tools") {
 				if (!restText) {
-					await showSettingsPanel(pi, ctx);
+					ctx.ui.notify(`Usage: /compact-transcript ${command} <tool[,tool]|/regex/|clear>`, "error");
 					return;
 				}
 				const values = restText === "clear" ? [] : splitList(restText);
 				if (command === "always-show") state.config.alwaysShowTools = values;
 				else state.config.mutationTools = values;
 				persistConfig(pi);
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
 
 			if (command === "template") {
 				const [tool, ...templateParts] = rest;
-				if (!tool) {
-					await showSettingsPanel(pi, ctx);
-					return;
-				}
 				const template = templateParts.join(" ").trim();
-				if (!template) {
-					await showSettingsPanel(pi, ctx);
+				if (!tool || !template) {
+					ctx.ui.notify("Usage: /compact-transcript template <tool|/regex/> <template|clear>", "error");
 					return;
 				}
 				if (template === "clear") delete state.config.previewTemplates[tool];
 				else state.config.previewTemplates[tool] = template;
 				persistConfig(pi);
-				updateStatus(ctx);
 				await showSettingsPanel(pi, ctx);
 				return;
 			}
 
-			if (ctx.mode === "tui") await showSettingsPanel(pi, ctx);
-			else ctx.ui.notify(commandHelp(), "error");
+			ctx.ui.notify(`Unknown option "${trimmed}".\n${commandHelp()}`, "error");
 		},
 	});
 }
@@ -1038,11 +1023,11 @@ export default function compactTranscript(pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		restoreConfigFromBranch(ctx);
-		state.ui = ctx.ui;
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		applyThinkingLabel(ctx);
 		ctx.ui.setWorkingMessage();
-		updateStatus(ctx);
+		// Clear any footer status left behind by pre-0.4 versions of this extension.
+		ctx.ui.setStatus(STATUS_KEY, undefined);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
@@ -1053,30 +1038,27 @@ export default function compactTranscript(pi: ExtensionAPI) {
 
 	pi.on("agent_start", (_event, ctx) => {
 		state.agentActive = true;
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		resetToolRun();
 		resetThinkingSignals();
 		state.consecutiveThinking = 0;
 		applyThinkingLabel(ctx);
-		updateStatus(ctx);
 	});
 
-	pi.on("agent_end", (_event, ctx) => {
+	pi.on("agent_end", (_event, _ctx) => {
 		state.agentActive = false;
 		state.currentNoiseBurst = [];
 		resetThinkingSignals();
-		updateStatus(ctx);
 	});
 
 	pi.on("turn_start", (_event, ctx) => {
 		state.consecutiveThinking = 0;
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		applyThinkingLabel(ctx);
-		updateStatus(ctx);
 	});
 
 	pi.on("message_update", (event, ctx) => {
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		const type = event.assistantMessageEvent?.type;
 		if (type === "thinking_start") {
 			state.consecutiveThinking++;
@@ -1094,20 +1076,17 @@ export default function compactTranscript(pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", (event, ctx) => {
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		beginTool(event.toolCallId, event.toolName, event.args);
-		updateStatus(ctx);
 	});
 
 	pi.on("tool_execution_update", (event, ctx) => {
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		updateToolResult(event.toolCallId, event.partialResult, false, true);
-		updateStatus(ctx);
 	});
 
 	pi.on("tool_execution_end", (event, ctx) => {
-		state.currentTheme = ctx.ui.theme;
+		captureTheme(ctx);
 		updateToolResult(event.toolCallId, event.result, event.isError, false);
-		updateStatus(ctx);
 	});
 }
