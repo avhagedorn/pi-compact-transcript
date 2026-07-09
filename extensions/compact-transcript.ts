@@ -310,7 +310,7 @@ export default async function (pi: ExtensionAPI) {
 
 	pi.on("session_start", async (_event, ctx) => {
 		applyThinkingLabel(ctx);
-		ctx.ui.setWorkingMessage(LABEL);
+		ctx.ui.setWorkingMessage();
 	});
 
 	pi.on("agent_start", () => {
