@@ -16,11 +16,16 @@ import { pathToFileURL } from "node:url";
 
 type BuiltInName = "bash" | "read" | "write" | "edit" | "grep" | "find" | "ls";
 
+type ToolKind = "noise" | "mutation";
+
 type ToolInfo = {
 	id: string;
 	name: string;
 	args: any;
 	preview: string;
+	kind: ToolKind;
+	hidden?: boolean;
+	burstCount?: number;
 	result?: string;
 	invalidate?: () => void;
 };
@@ -28,8 +33,9 @@ type ToolInfo = {
 const BUILT_INS: BuiltInName[] = ["bash", "read", "write", "edit", "grep", "find", "ls"];
 const LABEL = "Thinking...";
 
-let currentTools: ToolInfo[] = [];
 let toolsById = new Map<string, ToolInfo>();
+let currentNoiseBurst: ToolInfo[] = [];
+let agentActive = false;
 
 const toolCache = new Map<string, ReturnType<typeof createBuiltInTools>>();
 
@@ -122,58 +128,67 @@ function resultPreview(result: any): string {
 	return `${lines.length} lines`;
 }
 
-function toolCallName(block: any): string {
-	return block?.name ?? block?.toolName ?? block?.tool_name ?? block?.tool?.name ?? "tool";
-}
-
-function toolCallArgs(block: any): any {
-	return block?.args ?? block?.input ?? block?.arguments ?? block?.tool?.args ?? {};
+function isMutationTool(name: string): boolean {
+	return name === "edit" || name === "write" || name.endsWith(".edit") || name.endsWith(".write");
 }
 
 function resetToolRun() {
-	currentTools = [];
 	toolsById = new Map();
+	currentNoiseBurst = [];
 }
 
 function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
 	let info = toolsById.get(id);
 	if (!info) {
-		info = { id, name, args, preview: previewFor(name, args) };
+		info = { id, name, args, preview: previewFor(name, args), kind: isMutationTool(name) ? "mutation" : "noise" };
 		toolsById.set(id, info);
-		if (!currentTools.some((tool) => tool.id === id)) currentTools.push(info);
 	}
 	info.name = name;
 	info.args = args;
 	info.preview = previewFor(name, args);
+	info.kind = isMutationTool(name) ? "mutation" : "noise";
 	if (invalidate) info.invalidate = invalidate;
 	return info;
 }
 
-function compactToolLine(toolCallId: string, name: string, args: any, theme: any, invalidate?: () => void, result?: any): string {
-	const info = upsertToolInfo(toolCallId, name, args, invalidate);
-	const suffix = resultPreview(result);
-	if (suffix) info.result = suffix;
+function beginTool(id: string, name: string, args: any) {
+	const previousNoise = currentNoiseBurst[currentNoiseBurst.length - 1];
+	const info = upsertToolInfo(id, name, args);
+	info.hidden = false;
+	info.burstCount = 1;
 
-	if (currentTools[currentTools.length - 1]?.id !== toolCallId) return "";
+	if (info.kind === "mutation") {
+		currentNoiseBurst = [];
+		return;
+	}
 
-	const details = info.result ? `${info.preview} {${oneLine(info.result)}}` : info.preview;
-	if (currentTools.length === 1) return theme.fg("muted", limitPlain(details));
-	const prefix = `Used ${currentTools.length} tools `;
-	return theme.fg("toolTitle", prefix) + theme.fg("muted", limitPlain(details, Math.max(20, (process.stdout.columns || 100) - prefix.length - 6)));
+	if (!currentNoiseBurst.some((tool) => tool.id === id)) currentNoiseBurst.push(info);
+	for (const tool of currentNoiseBurst.slice(0, -1)) tool.hidden = true;
+	info.burstCount = currentNoiseBurst.length;
+	previousNoise?.invalidate?.();
 }
 
-function nextStepSummary(content: any[], fromIndex: number): string {
-	const tools = content.slice(fromIndex + 1).filter((c: any) => c?.type === "toolCall");
-	if (tools.length === 0) return " Next, I’ll continue from this reasoning and respond with the result. I’ll keep the visible output brief.";
+function compactToolLine(toolCallId: string, name: string, args: any, theme: any, invalidate?: () => void, result?: any): string {
+	let info = toolsById.get(toolCallId);
 
-	const first = tools[0];
-	const preview = limitPlain(previewFor(toolCallName(first), toolCallArgs(first)), 90);
-	if (tools.length === 1) {
-		return ` Next, I’ll use ${preview}. I’ll inspect the result and decide the next visible step from there.`;
+	// Hydration/resume path: compact the individual row, but do not mutate burst
+	// state or invalidate older rows while pi is rebuilding chat history.
+	if (!agentActive && !info) {
+		const suffix = resultPreview(result);
+		const preview = previewFor(name, args);
+		const details = suffix ? `${preview} {${oneLine(suffix)}}` : preview;
+		return theme.fg("muted", limitPlain(details));
 	}
-	const last = tools[tools.length - 1];
-	const lastPreview = limitPlain(previewFor(toolCallName(last), toolCallArgs(last)), 70);
-	return ` Next, I’ll run ${tools.length} tool calls, starting with ${preview}. I’ll use the latest result to continue, ending this batch around ${lastPreview}.`;
+
+	info = upsertToolInfo(toolCallId, name, args, invalidate);
+	const suffix = resultPreview(result);
+	if (suffix) info.result = suffix;
+	if (info.hidden) return "";
+
+	const details = info.result ? `${info.preview} {${oneLine(info.result)}}` : info.preview;
+	if (info.kind === "mutation" || (info.burstCount ?? 1) <= 1) return theme.fg("muted", limitPlain(details));
+	const prefix = `Used ${info.burstCount} tools `;
+	return theme.fg("toolTitle", prefix) + theme.fg("muted", limitPlain(details, Math.max(20, (process.stdout.columns || 100) - prefix.length - 6)));
 }
 
 async function patchInternalRenderers() {
@@ -259,9 +274,8 @@ async function patchInternalRenderers() {
 				i += count - 1;
 
 				const label = count > 1 ? `${LABEL} (${count}x)` : LABEL;
-				const summary = nextStepSummary(message.content, i);
 				this.contentContainer.addChild(
-					new Text(themeModule.theme.italic(themeModule.theme.fg("thinkingText", limitPlain(`${label}${summary}`))), this.outputPad, 0),
+					new Text(themeModule.theme.italic(themeModule.theme.fg("thinkingText", label)), this.outputPad, 0),
 				);
 
 				const hasVisibleAfter = message.content
@@ -300,7 +314,13 @@ export default async function (pi: ExtensionAPI) {
 	});
 
 	pi.on("agent_start", () => {
+		agentActive = true;
 		resetTools();
+	});
+
+	pi.on("agent_end", () => {
+		agentActive = false;
+		currentNoiseBurst = [];
 	});
 
 	pi.on("turn_start", (_event, ctx) => {
@@ -323,9 +343,7 @@ export default async function (pi: ExtensionAPI) {
 	});
 
 	pi.on("tool_execution_start", (event: any) => {
-		const previous = currentTools[currentTools.length - 1];
-		upsertToolInfo(event.toolCallId, event.toolName, event.args);
-		previous?.invalidate?.();
+		beginTool(event.toolCallId, event.toolName, event.args);
 	});
 
 	pi.on("tool_execution_end", (event: any) => {

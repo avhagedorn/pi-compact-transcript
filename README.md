@@ -3,9 +3,10 @@
 A compact transcript extension for [pi](https://pi.dev):
 
 - Collapses hidden thinking blocks into `Thinking...` and consecutive thinking blocks into `Thinking... (Nx)`.
-- Adds a short, visible next-step summary to collapsed thinking rows without exposing raw chain-of-thought.
-- Collapses built-in tool calls/results into one-line previews.
-- Consecutive tool uses in the same agent run are summarized as `Used N tools <latest tool preview>`.
+- Shows only real collapsed thinking labels/counters; it does not invent next-step prose.
+- Collapses tool calls/results into one-line previews, including MCP/custom tools.
+- Consecutive non-mutating tool uses are summarized as `Used N tools <latest tool preview>`.
+- Mutating tools (`edit`, `write`) stay visible as transcript anchors and break tool bursts.
 - Minimizes vertical space so long agent runs do not scroll away as quickly.
 
 ## Install from GitHub
