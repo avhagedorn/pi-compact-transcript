@@ -2,9 +2,9 @@
 
 A compact transcript extension for [pi](https://pi.dev).
 
-| Without the extension | With the extension |
+| With the extension | Without the extension|
 |---|---|
-| ![pi transcript without the extension](docs/plugin_disabled.png) | ![pi transcript with the extension](docs/plugin_enabled.png) |
+| ![pi transcript with the extension](docs/plugin_enabled.png) | ![pi transcript without the extension](docs/plugin_disabled.png) |
 
 What it does:
 
