@@ -2,9 +2,13 @@
 
 A compact transcript extension for [pi](https://pi.dev).
 
-| With the extension | Without the extension|
-|---|---|
-| <img width="2131" height="552" alt="image" src="https://github.com/user-attachments/assets/4ec40fe8-13da-4415-8274-e26e43cca4e1" /> | <img width="2135" height="1275" alt="image" src="https://github.com/user-attachments/assets/b6fe8d3b-9170-435c-b353-98a6aa84fe7b" /> |
+## With the extension
+
+<img width="2131" height="552" alt="image" src="https://github.com/user-attachments/assets/4ec40fe8-13da-4415-8274-e26e43cca4e1" />
+
+## Without the extension
+
+<img width="2135" height="1275" alt="image" src="https://github.com/user-attachments/assets/b6fe8d3b-9170-435c-b353-98a6aa84fe7b" />
 
 What it does:
 
