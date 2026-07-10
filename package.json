@@ -1,6 +1,6 @@
 {
   "name": "pi-compact-transcript",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A compact transcript extension for pi: collapsed thinking summaries and one-line tool previews.",
   "type": "module",
   "license": "MIT",

@@ -1,13 +1,22 @@
 # pi-compact-transcript
 
-A compact transcript extension for [pi](https://pi.dev):
+A compact transcript extension for [pi](https://pi.dev).
 
-- Collapses hidden thinking blocks into `Thinking...` and consecutive thinking blocks into `Thinking... (Nx)`.
-- Shows only real collapsed thinking labels/counters; it does not invent next-step prose.
-- Collapses tool calls/results into one-line previews, including custom/external tools added by other extensions.
-- Consecutive non-mutating tool uses are summarized by count and kind, e.g. `Used 7 tools: 4 read, 2 grep, 1 bash · latest read src/foo.ts`.
-- Mutating tools (`edit`, `write`, configured mutation tools, and destructive-looking `bash` commands) stay visible as transcript anchors and break tool bursts.
-- Failed tools stay visible by default so errors are not hidden.
+| Without the extension | With the extension |
+|---|---|
+| ![pi transcript without the extension](docs/plugin_disabled.png) | ![pi transcript with the extension](docs/plugin_enabled.png) |
+
+What it does:
+
+- Collapses every tool call/result into a one-line preview, including custom/external tools added by other extensions.
+- Each tool row carries a status diamond: blinking gray `◆` while the tool runs, solid green `◆` on success, solid red `◆` on failure.
+- Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`; a different tool starts a new row with its own diamond.
+- Tool rows show durations when they take a second or longer; grouped rows show the total.
+- Failed tools always get their own visible row (red diamond) and end the current burst.
+- Tool rows render dimmed so assistant text stands out.
+- Hidden thinking blocks are suppressed entirely — no `Thinking...` markers.
+- Each agent run ends with a one-line summary, e.g. `Read 6 files, edited 2, ran 3 commands, 1 failed · 42s`.
+- Unknown tools preview their most meaningful string argument (command, code, query, path, url, ...) instead of dumping raw JSON args.
 - Expanded tool output still falls back to pi's original renderer, so you can use pi's normal tool expansion when details matter.
 - Minimizes vertical space so long agent runs do not scroll away as quickly.
 
@@ -50,43 +59,20 @@ The extension works best with hidden thinking and no output padding:
 
 Set these in `~/.pi/agent/settings.json`, or use `/settings` in pi.
 
+Thinking suppression only applies when `hideThinkingBlock` is on; with it off, pi renders thinking traces normally.
+
 ## Commands
 
 ```text
-/compact-transcript              # open the settings-style panel
-/compact-transcript status       # same as above
-/compact-transcript disabled|balanced|aggressive|debug
-/compact-transcript custom-tools on|off
-/compact-transcript failed on|off
-/compact-transcript bash-mutations on|off
-/compact-transcript always-show <tool[,tool]|/regex/|clear>
-/compact-transcript mutation-tools <tool[,tool]|/regex/|clear>
-/compact-transcript template <tool|/regex/> <template|clear>
+/compact-transcript          # toggle on/off
+/compact-transcript on|off   # set explicitly
+/compact-transcript status   # show current state
 ```
 
-In interactive pi, `/compact-transcript` opens a focused settings-style panel in the editor area. Press `Enter`/`Space` to toggle values, edit list/template rows inline, and `Esc` to close it.
-
-Modes:
-
-- `balanced` (default): compact non-mutating bursts, keep mutations/failures visible, and preserve normal hidden-thinking markers.
-- `aggressive`: shorter previews and coalesced thinking-only markers.
-- `debug`: compact rows but do not hide earlier burst rows; useful when tuning rules.
-- `disabled`: fully disable compact-transcript rendering for future rows. (`off` is accepted as a legacy alias.)
-
-Switching modes never changes the other toggles (custom tools, failed tools, bash anchors); those are independent settings.
-
-Preview templates support `{name}`, `{args}`, top-level argument names like `{path}` and `{command}`, and nested fields like `{arg.query.text}`. In the panel, edit templates as semicolon-separated `tool=template` pairs, so template text itself cannot contain `;`.
-
-Examples:
-
-```text
-/compact-transcript always-show ask_user_question,/^deploy_/
-/compact-transcript mutation-tools db_query,kubectl
-/compact-transcript template fetch_content fetch {url}
-```
+Toggling applies to the visible transcript immediately — existing rows re-render, no reload needed. The pre-0.5 mode names (`balanced`, `aggressive`, `debug`, `disabled`) are accepted as legacy aliases for `on`/`off`.
 
 ## Notes
 
 This extension changes display only. Tool execution is still handled by pi and any other extensions that registered or override tools.
 
-For built-in and extension tools, compact rendering uses pi's public exported TUI components where available. The cross-tool burst compaction and consecutive-thinking coalescing still rely on pi's current TUI component internals, so if pi changes those internals in a future release, the extension falls back to pi's normal rendering behavior for the affected rows.
+For built-in and extension tools, compact rendering uses pi's public exported TUI components where available. The cross-tool burst compaction and thinking suppression still rely on pi's current TUI component internals, so if pi changes those internals in a future release, the extension falls back to pi's normal rendering behavior for the affected rows.
