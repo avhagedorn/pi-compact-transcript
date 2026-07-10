@@ -70,6 +70,9 @@ type RuntimeState = {
 	toolComponents: Set<any>;
 	assistantComponents: Set<any>;
 	currentTheme?: Theme;
+	thinkingHidden: boolean;
+	currentThoughtHeading?: string;
+	thoughtAnchorId?: string;
 };
 
 const DEFAULT_CONFIG: CompactTranscriptConfig = {
@@ -117,8 +120,13 @@ function getState(): RuntimeState {
 		runStats: newRunStats(),
 		toolComponents: new Set(),
 		assistantComponents: new Set(),
+		thinkingHidden: true,
 	};
-	return globalWithState[STATE_KEY]!;
+	const runtimeState = globalWithState[STATE_KEY]!;
+	// /reload keeps the global object alive; initialize fields added by newer
+	// versions when an older extension instance created the state object.
+	runtimeState.thinkingHidden ??= true;
+	return runtimeState;
 }
 
 const state = getState();
@@ -259,6 +267,8 @@ function resetToolRun() {
 	state.currentBurst = [];
 	state.hiddenToolIds = new Set();
 	state.runningToolIds = new Set();
+	state.currentThoughtHeading = undefined;
+	state.thoughtAnchorId = undefined;
 	stopBlinkTimer();
 }
 
@@ -308,6 +318,110 @@ function statusMarker(theme: Theme, opts: { running?: boolean; isError?: boolean
 	if (opts.running) return theme.fg("dim", state.blinkOn ? "◆ " : "◇ ");
 	if (opts.hasResult) return theme.fg("success", "◆ ");
 	return theme.fg("dim", "◆ ");
+}
+
+function textSignalHasVisibleContent(assistantMessageEvent: any): boolean {
+	const type = assistantMessageEvent?.type;
+	if (type === "text_delta") {
+		return typeof assistantMessageEvent.delta === "string" && assistantMessageEvent.delta.trim().length > 0;
+	}
+	if (type === "text_end") {
+		return typeof assistantMessageEvent.content === "string" && assistantMessageEvent.content.trim().length > 0;
+	}
+	return false;
+}
+
+function thoughtTickerEnabled(): boolean {
+	// The ticker is a compact replacement for hidden thinking. When thinking is
+	// fully visible, showing the same headline under a tool would be duplicate.
+	return isEnabled() && state.thinkingHidden;
+}
+
+function cleanThoughtHeading(line: string): string {
+	let clean = oneLine(line)
+		.replace(/^#{1,6}\s+/, "")
+		.replace(/^[-*]\s+/, "")
+		.trim();
+	clean = clean
+		.replace(/^\*\*(.+)\*\*$/, "$1")
+		.replace(/^__(.+)__$/, "$1")
+		.replace(/^`(.+)`$/, "$1");
+	return clean.trim();
+}
+
+function extractThoughtHeading(text: unknown): string {
+	if (typeof text !== "string") return "";
+	const firstLine = text.split(/\r?\n/).find((line) => line.trim().length > 0);
+	return firstLine ? cleanThoughtHeading(firstLine) : "";
+}
+
+function latestThoughtHeading(message: any): string {
+	if (!Array.isArray(message?.content)) return "";
+	for (let i = message.content.length - 1; i >= 0; i--) {
+		const content = message.content[i];
+		if (content?.type === "thinking") return extractThoughtHeading(content.thinking);
+	}
+	return "";
+}
+
+function invalidateToolById(id: string | undefined) {
+	if (!id) return;
+	state.toolsById.get(id)?.invalidate?.();
+}
+
+function latestVisibleTool(): ToolInfo | undefined {
+	return Array.from(state.toolsById.values())
+		.reverse()
+		.find((tool) => !tool.hidden);
+}
+
+function clearCurrentThought() {
+	if (!state.currentThoughtHeading && !state.thoughtAnchorId) return;
+	const previousAnchorId = state.thoughtAnchorId;
+	state.currentThoughtHeading = undefined;
+	state.thoughtAnchorId = undefined;
+	invalidateToolById(previousAnchorId);
+}
+
+function setCurrentThought(heading: string) {
+	const nextHeading = oneLine(heading);
+	if (!thoughtTickerEnabled() || !nextHeading) {
+		clearCurrentThought();
+		return;
+	}
+
+	const previousAnchorId = state.thoughtAnchorId;
+	const nextAnchorId = latestVisibleTool()?.id;
+	const changed = state.currentThoughtHeading !== nextHeading || previousAnchorId !== nextAnchorId;
+	state.currentThoughtHeading = nextHeading;
+	state.thoughtAnchorId = nextAnchorId;
+	if (!changed) return;
+
+	invalidateToolById(previousAnchorId);
+	if (nextAnchorId !== previousAnchorId) invalidateToolById(nextAnchorId);
+}
+
+function updateCurrentThoughtFromMessage(message: any) {
+	const heading = latestThoughtHeading(message);
+	// A new thinking block starts empty; keep showing the previous heading until
+	// the replacement has real text so the ticker does not blink off/on between
+	// tool completion and the next streamed thought.
+	if (heading) setCurrentThought(heading);
+}
+
+function anchorCurrentThoughtTo(info: ToolInfo) {
+	if (!thoughtTickerEnabled() || !state.currentThoughtHeading || state.thoughtAnchorId === info.id) return;
+	const previousAnchorId = state.thoughtAnchorId;
+	state.thoughtAnchorId = info.id;
+	invalidateToolById(previousAnchorId);
+	info.invalidate?.();
+}
+
+function currentThoughtLine(toolCallId: string, theme: Theme): string {
+	if (!thoughtTickerEnabled() || state.thoughtAnchorId !== toolCallId || !state.currentThoughtHeading) return "";
+	const prefix = "  ↳ ";
+	const budget = previewWidth((process.stdout.columns || 100) - prefix.length);
+	return theme.fg("dim", prefix) + theme.fg("thinkingText", limitPlain(state.currentThoughtHeading, budget));
 }
 
 function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
@@ -368,9 +482,10 @@ function beginTool(id: string, name: string, args: any) {
 	ensureBlinkTimer();
 	recordToolStart(name, args);
 	joinBurst(info);
+	anchorCurrentThoughtTo(info);
 	// The component may already be on screen from argument streaming; repaint
-	// now so the running marker and burst count appear immediately instead of
-	// waiting for the next result event or blink tick.
+	// now so the running marker, burst count, and thought ticker appear
+	// immediately instead of waiting for the next result event or blink tick.
 	info.invalidate?.();
 }
 
@@ -515,6 +630,8 @@ function patchToolExecutionComponent() {
 		}
 
 		this.selfRenderContainer.addChild(new Text(line, 0, 0));
+		const thoughtLine = currentThoughtLine(this.toolCallId, theme);
+		if (thoughtLine) this.selfRenderContainer.addChild(new Text(thoughtLine, 0, 0));
 	};
 
 	proto.render = function patchedRender(width: number) {
@@ -534,6 +651,8 @@ function patchAssistantMessageComponent() {
 
 	proto.updateContent = function patchedUpdateContent(message: any) {
 		state.assistantComponents.add(this);
+		state.thinkingHidden = !!this.hideThinkingBlock;
+		if (!state.thinkingHidden) clearCurrentThought();
 		if (!isEnabled() || !this.hideThinkingBlock || !Array.isArray(message?.content)) {
 			return originalUpdateContent.call(this, message);
 		}
@@ -549,6 +668,7 @@ function patchAssistantMessageComponent() {
 		const texts = message.content.filter((c: any) => c.type === "text" && c.text?.trim());
 		if (texts.length === 0) return;
 
+		clearCurrentThought();
 		// Assistant text ends a tool burst. The live path also does this via
 		// message_update events; doing it here too keeps hydrated history from
 		// grouping tool rows across turn boundaries.
@@ -733,6 +853,7 @@ export default function compactTranscript(pi: ExtensionAPI) {
 	pi.on("agent_end", (_event, _ctx) => {
 		state.agentActive = false;
 		state.currentBurst = [];
+		clearCurrentThought();
 		state.runningToolIds.clear();
 		stopBlinkTimer();
 		appendRunSummary(pi);
@@ -745,8 +866,14 @@ export default function compactTranscript(pi: ExtensionAPI) {
 	pi.on("message_update", (event, ctx) => {
 		captureTheme(ctx);
 		const type = event.assistantMessageEvent?.type;
-		if (type === "text_delta" || type === "text_start") {
-			// Visible assistant text ends the current tool burst.
+		if (typeof type === "string" && type.startsWith("thinking_")) {
+			updateCurrentThoughtFromMessage(event.message);
+		}
+		if (textSignalHasVisibleContent(event.assistantMessageEvent)) {
+			clearCurrentThought();
+			// Visible assistant text ends the current tool burst. Do not split on
+			// text_start alone: some providers create empty text blocks before a
+			// tool-only turn, and those blocks are hidden from the transcript.
 			state.currentBurst = [];
 		}
 	});
