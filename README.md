@@ -8,19 +8,20 @@ A compact transcript extension for [pi](https://pi.dev).
 
 What it does:
 
-- Collapses every tool call/result into a one-line preview, including custom/external tools added by other extensions.
-- Each tool row carries a status diamond: blinking gray `◆` while the tool runs, solid green `◆` on success, solid red `◆` on failure.
-- Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`; a different tool starts a new row with its own diamond.
-- Tool rows show durations when they take a second or longer; grouped rows show the total.
-- Failed tools always get their own visible row (red diamond) and end the current burst.
-- Tool rows render dimmed so assistant text stands out.
-- Hidden thinking blocks are suppressed entirely — no `Thinking...` markers.
+- Collapses every tool call/result into a dimmed one-line preview with a status diamond: blinking gray `◆` while running, green on success, red on failure. Durations show at a second or longer.
+- Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`. Failed tools always get their own visible row.
 - Each agent run ends with a one-line summary, e.g. `Read 6 files, edited 2, ran 3 commands, 1 failed · 42s`.
-- Unknown tools preview their most meaningful string argument (command, code, query, path, url, ...) instead of dumping raw JSON args.
-- Expanded tool output still falls back to pi's original renderer, so you can use pi's normal tool expansion when details matter.
-- Minimizes vertical space so long agent runs do not scroll away as quickly.
+- Suppresses `Thinking...` markers when thinking is hidden.
+- Works with custom/external tools from other extensions; unknown tools preview their most meaningful string argument (command, code, query, path, url, ...) instead of raw JSON.
+- Expanded tool output still uses pi's original renderer, so pi's normal tool expansion works when details matter.
 
-## Install from GitHub
+## Install
+
+```bash
+pi install npm:pi-compact-transcript
+```
+
+Or from GitHub:
 
 ```bash
 pi install git:github.com/avhagedorn/pi-compact-transcript
@@ -38,17 +39,9 @@ Reload or restart pi after installing:
 /reload
 ```
 
-## Install from npm
-
-Once published to npm:
-
-```bash
-pi install npm:pi-compact-transcript
-```
-
 ## Recommended settings
 
-The extension works best with hidden thinking and no output padding:
+Works best with hidden thinking and no output padding — set in `~/.pi/agent/settings.json` or via `/settings`:
 
 ```json
 {
@@ -56,8 +49,6 @@ The extension works best with hidden thinking and no output padding:
   "outputPad": 0
 }
 ```
-
-Set these in `~/.pi/agent/settings.json`, or use `/settings` in pi.
 
 Thinking suppression only applies when `hideThinkingBlock` is on; with it off, pi renders thinking traces normally.
 
@@ -69,10 +60,10 @@ Thinking suppression only applies when `hideThinkingBlock` is on; with it off, p
 /compact-transcript status   # show current state
 ```
 
-Toggling applies to the visible transcript immediately — existing rows re-render, no reload needed. The pre-0.5 mode names (`balanced`, `aggressive`, `debug`, `disabled`) are accepted as legacy aliases for `on`/`off`.
+Toggling re-renders the visible transcript immediately — no reload needed. Pre-0.5 mode names (`balanced`, `aggressive`, `debug`, `disabled`) are accepted as legacy aliases for `on`/`off`.
 
 ## Notes
 
-This extension changes display only. Tool execution is still handled by pi and any other extensions that registered or override tools.
+This extension changes display only — tool execution is still handled by pi and any other extensions that registered or override tools.
 
-For built-in and extension tools, compact rendering uses pi's public exported TUI components where available. The cross-tool burst compaction and thinking suppression still rely on pi's current TUI component internals, so if pi changes those internals in a future release, the extension falls back to pi's normal rendering behavior for the affected rows.
+Compact rendering uses pi's public exported TUI components where available. Burst compaction and thinking suppression rely on pi's current TUI internals; if a future pi release changes those, the affected rows fall back to pi's normal rendering.
