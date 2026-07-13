@@ -1,6 +1,6 @@
 {
   "name": "pi-compact-transcript",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A compact transcript extension for pi: collapsed thinking summaries and one-line tool previews.",
   "type": "module",
   "license": "MIT",
@@ -21,7 +21,9 @@
     "terminal"
   ],
   "pi": {
-    "extensions": ["./extensions/compact-transcript.ts"]
+    "extensions": [
+      "./extensions/compact-transcript.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
