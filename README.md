@@ -56,6 +56,23 @@ Works best with hidden thinking and no output padding — set in `~/.pi/agent/se
 
 Thinking suppression only applies when `hideThinkingBlock` is on; with it off, pi renders thinking traces normally.
 
+## Default configuration
+
+The default can be overridden without editing the extension source:
+
+- User-wide: `~/.pi/agent/compact-transcript.json`
+- Trusted project: `<project>/.pi/compact-transcript.json`
+
+Example:
+
+```json
+{
+  "enabled": false
+}
+```
+
+Configuration is resolved in this order (highest priority first): current-session `/compact-transcript on|off`, trusted project configuration, user-wide configuration, then the built-in default (`enabled: true`). Project configuration is ignored unless Pi reports the project as trusted. Missing files, invalid JSON, and unsupported values are ignored and the next fallback is used. Session toggles remain stored in the existing session entries, and legacy mode values remain supported.
+
 ## Commands
 
 ```text
