@@ -27,7 +27,7 @@
     "image": "https://github.com/user-attachments/assets/4ec40fe8-13da-4415-8274-e26e43cca4e1"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-coding-agent": ">=0.79.7",
     "@earendil-works/pi-tui": "*"
   },
   "files": [
