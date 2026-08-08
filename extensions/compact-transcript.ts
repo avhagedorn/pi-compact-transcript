@@ -1,7 +1,13 @@
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { AssistantMessageComponent, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import {
+	AssistantMessageComponent,
+	CONFIG_DIR_NAME,
+	getAgentDir,
+	ToolExecutionComponent,
+} from "@earendil-works/pi-coding-agent";
 import { Markdown, Spacer, Text } from "@earendil-works/pi-tui";
-import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Older versions of this extension wrote a footer status under this key; it is
 // kept only to clear that status once per session for users upgrading in place.
@@ -95,9 +101,9 @@ function newRunStats(): RunStats {
 	};
 }
 
-function normalizeConfig(input: unknown): CompactTranscriptConfig {
+function normalizeConfig(input: unknown, fallback = DEFAULT_CONFIG): CompactTranscriptConfig {
 	const source = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-	let enabled = DEFAULT_CONFIG.enabled;
+	let enabled = fallback.enabled;
 	if (typeof source.enabled === "boolean") {
 		enabled = source.enabled;
 	} else if (typeof source.mode === "string") {
@@ -105,6 +111,39 @@ function normalizeConfig(input: unknown): CompactTranscriptConfig {
 		enabled = source.mode !== "disabled" && source.mode !== "off";
 	}
 	return { enabled };
+}
+
+function readConfigFile(path: string): CompactTranscriptConfig | undefined {
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+
+		const source = parsed as Record<string, unknown>;
+		if (typeof source.enabled === "boolean") return { enabled: source.enabled };
+		if (typeof source.mode === "string") {
+			// Accept the old mode spelling in extension config files too.
+			return { enabled: source.mode !== "disabled" && source.mode !== "off" };
+		}
+		return undefined;
+	} catch {
+		// Missing, unreadable, or malformed config files use the next fallback.
+		return undefined;
+	}
+}
+
+function loadConfigFromFiles(ctx: ExtensionContext): CompactTranscriptConfig {
+	let nextConfig = { ...DEFAULT_CONFIG };
+	const userConfig = readConfigFile(join(getAgentDir(), "compact-transcript.json"));
+	if (userConfig) nextConfig = userConfig;
+
+	// Project-local configuration is only meaningful after Pi has trusted the
+	// project. Never inspect this path for an untrusted project.
+	if (ctx.isProjectTrusted()) {
+		const projectConfig = readConfigFile(join(ctx.cwd, CONFIG_DIR_NAME, "compact-transcript.json"));
+		if (projectConfig) nextConfig = projectConfig;
+	}
+
+	return nextConfig;
 }
 
 function getState(): RuntimeState {
@@ -757,10 +796,10 @@ function appendRunSummary(pi: ExtensionAPI) {
 }
 
 function restoreConfigFromBranch(ctx: ExtensionContext) {
-	let nextConfig = { ...DEFAULT_CONFIG };
+	let nextConfig = loadConfigFromFiles(ctx);
 	for (const entry of ctx.sessionManager.getBranch()) {
 		if (entry.type === "custom" && entry.customType === CONFIG_ENTRY_TYPE) {
-			nextConfig = normalizeConfig(entry.data);
+			nextConfig = normalizeConfig(entry.data, nextConfig);
 		}
 	}
 	state.config = nextConfig;
