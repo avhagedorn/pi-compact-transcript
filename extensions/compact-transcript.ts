@@ -683,6 +683,28 @@ function patchToolExecutionComponent() {
 	proto[TOOL_PATCH_KEY] = { originalUpdateDisplay, originalRender };
 }
 
+/** Re-apply pi's markdown transformers (mirrors createMarkdownTransform in pi core).
+ *  Without this, Mermaid blocks fall back to raw code when this extension
+ *  takes over rendering of assistant text. */
+function applyMarkdownTransformers(
+	markdown: string,
+	transformers: any[],
+	messageType: string,
+	isStreaming: boolean,
+	availableWidth: number,
+): string {
+	let transformedMarkdown = markdown;
+	for (const transformer of transformers ?? []) {
+		try {
+			const transformed = transformer(transformedMarkdown, { messageType, isStreaming, availableWidth });
+			if (typeof transformed === "string") transformedMarkdown = transformed;
+		} catch {
+			// Keep the current Markdown and continue with the next transformer.
+		}
+	}
+	return transformedMarkdown;
+}
+
 function patchAssistantMessageComponent() {
 	const proto = AssistantMessageComponent.prototype as any;
 	if (typeof proto.updateContent !== "function") return;
@@ -716,7 +738,18 @@ function patchAssistantMessageComponent() {
 
 		this.contentContainer.addChild(new Spacer(1));
 		for (const content of texts) {
-			this.contentContainer.addChild(new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme));
+			this.contentContainer.addChild(
+				new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
+					transform: (markdown: string, availableWidth: number) =>
+						applyMarkdownTransformers(
+							markdown,
+							(this as any).markdownTransformers,
+							"assistant",
+							(this as any).isStreaming ?? false,
+							availableWidth,
+						),
+				}),
+			);
 		}
 	};
 
