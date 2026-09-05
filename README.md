@@ -12,7 +12,8 @@ A compact transcript extension for [pi](https://pi.dev).
 
 What it does:
 
-- Collapses every tool call/result into a dimmed one-line preview with a status diamond: blinking gray `◆` while running, green on success, red on failure. Durations show at a second or longer.
+- Highlights agent commentary with an accent-colored left rail and a blank line before the tools below it, preserving Markdown formatting. Final answers stay unframed.
+- Collapses every tool call/result into a dimmed one-line preview with a status diamond: blinking gray `◆` while running, green on success, red on failure. Failed previews retain higher-contrast text. Durations show at a second or longer.
 - Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`. Failed tools always get their own visible row.
 - Each agent run ends with a one-line summary, e.g. `Read 6 files, edited 2, ran 3 commands, 1 failed · 42s`.
 - Suppresses `Thinking...` markers when thinking is hidden.
@@ -54,7 +55,7 @@ Works best with hidden thinking and no output padding — set in `~/.pi/agent/se
 }
 ```
 
-Thinking suppression only applies when `hideThinkingBlock` is on; with it off, pi renders thinking traces normally.
+Thinking suppression only applies when `hideThinkingBlock` is on; with it off, pi renders thinking traces normally. Commentary styling works with either setting. A message is identified as commentary once it contains a tool call, so streaming text stays unframed until that tool call arrives.
 
 ## Default configuration
 

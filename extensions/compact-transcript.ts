@@ -5,7 +5,7 @@ import {
 	getAgentDir,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import { type Component, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +23,7 @@ const PREVIEW_MARGIN = 6;
 const BLINK_INTERVAL_MS = 400;
 // Status marker is two cells wide ("◆ ").
 const MARKER_WIDTH = 2;
+const COMMENTARY_RAIL_WIDTH = 2;
 
 type CompactTranscriptConfig = {
 	enabled: boolean;
@@ -599,13 +600,10 @@ function compactToolLine(
 		isError: info.isError,
 		hasResult: result != null || !!info.result,
 	});
-	if (!isBurst) {
-		return marker + theme.fg("muted", limitPlain(details));
-	}
-
-	const prefix = `${info.burstCount}× `;
+	const color = info.isError ? "muted" : "dim";
+	const prefix = isBurst ? `${info.burstCount}× ` : "";
 	const budget = previewWidth((process.stdout.columns || 100) - prefix.length - MARKER_WIDTH);
-	return marker + theme.fg("muted", prefix + limitPlain(details, budget));
+	return marker + theme.fg(color, prefix + limitPlain(details, budget));
 }
 
 function patchToolExecutionComponent() {
@@ -675,7 +673,10 @@ function patchToolExecutionComponent() {
 			return;
 		}
 
-		this.selfRenderContainer.addChild(new Text(line, 0, 0));
+		this.selfRenderContainer.addChild({
+			render: (width: number) => [truncateToWidth(line, Math.max(0, width))],
+			invalidate() {},
+		});
 		const thoughtLine = currentThoughtLine(this.toolCallId, theme);
 		if (thoughtLine) this.selfRenderContainer.addChild(new Text(thoughtLine, 0, 0));
 	};
@@ -711,23 +712,61 @@ function applyMarkdownTransformers(
 	return transformedMarkdown;
 }
 
+class CommentaryRail implements Component {
+	private readonly content: Component;
+
+	constructor(content: Component) {
+		this.content = content;
+	}
+
+	render(width: number): string[] {
+		if (width <= COMMENTARY_RAIL_WIDTH) return this.content.render(width);
+		const rail = state.currentTheme?.fg("accent", "│ ") ?? "│ ";
+		return this.content.render(width - COMMENTARY_RAIL_WIDTH).map((line) => rail + line);
+	}
+
+	invalidate(): void {
+		this.content.invalidate();
+	}
+}
+
+function frameCommentary(component: any, message: any): void {
+	if (!message.content.some((content: any) => content.type === "toolCall")) return;
+	const children = component.contentContainer?.children;
+	if (!Array.isArray(children)) return;
+	let framed = false;
+	for (let i = 0; i < children.length; i++) {
+		if (children[i] instanceof Markdown) {
+			children[i] = new CommentaryRail(children[i]);
+			framed = true;
+		}
+	}
+	if (framed) component.contentContainer.addChild(new Spacer(1));
+}
+
 function patchAssistantMessageComponent() {
 	const proto = AssistantMessageComponent.prototype as any;
 	if (typeof proto.updateContent !== "function") return;
 	const existing = proto[ASSISTANT_PATCH_KEY] as { originalUpdateContent: (...args: any[]) => any } | undefined;
 	const originalUpdateContent = existing?.originalUpdateContent ?? proto.updateContent;
 
-	proto.updateContent = function patchedUpdateContent(message: any) {
+	proto.updateContent = function patchedUpdateContent(this: any, message: any, isStreaming = this.isStreaming) {
 		state.assistantComponents.add(this);
 		state.thinkingHidden = !!this.hideThinkingBlock;
 		if (!state.thinkingHidden) clearCurrentThought();
-		if (!isEnabled() || !this.hideThinkingBlock || !Array.isArray(message?.content)) {
-			return originalUpdateContent.call(this, message);
+		if (!isEnabled() || !Array.isArray(message?.content)) {
+			return originalUpdateContent.call(this, message, isStreaming);
+		}
+		if (!this.hideThinkingBlock) {
+			const result = originalUpdateContent.call(this, message, isStreaming);
+			frameCommentary(this, message);
+			return result;
 		}
 		if (!this.contentContainer || typeof this.contentContainer.clear !== "function") {
-			return originalUpdateContent.call(this, message);
+			return originalUpdateContent.call(this, message, isStreaming);
 		}
 
+		this.isStreaming = isStreaming;
 		this.lastMessage = message;
 		this.contentContainer.clear();
 		this.hasToolCalls = message.content.some((c: any) => c.type === "toolCall");
@@ -757,6 +796,7 @@ function patchAssistantMessageComponent() {
 				}),
 			);
 		}
+		frameCommentary(this, message);
 	};
 
 	proto[ASSISTANT_PATCH_KEY] = { originalUpdateContent };
