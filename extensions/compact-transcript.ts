@@ -864,7 +864,7 @@ function patchAssistantMessageComponent() {
 		const texts = message.content.filter((c: any) => c.type === "text" && c.text?.trim());
 		if (texts.length === 0) return;
 
-		clearCurrentThought();
+		if (!this.hasToolCalls && state.runningToolIds.size === 0) clearCurrentThought();
 		// Assistant text ends a tool burst. The live path also does this via
 		// message_update events; doing it here too keeps hydrated history from
 		// grouping tool rows across turn boundaries.
@@ -1187,7 +1187,8 @@ export default function compactTranscript(pi: ExtensionAPI) {
 			updateCurrentThoughtFromMessage(event.message);
 		}
 		if (textSignalHasVisibleContent(event.assistantMessageEvent)) {
-			clearCurrentThought();
+			const messageHasToolCall = Array.isArray(event.message?.content) && event.message.content.some((content: any) => content.type === "toolCall");
+			if (!messageHasToolCall && state.runningToolIds.size === 0) clearCurrentThought();
 			// Visible assistant text ends the current tool burst. Do not split on
 			// text_start alone: some providers create empty text blocks before a
 			// tool-only turn, and those blocks are hidden from the transcript.
