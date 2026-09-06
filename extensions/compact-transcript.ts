@@ -34,12 +34,14 @@ type ToolInfo = {
 	name: string;
 	args: any;
 	preview: string;
+	writeLines?: number;
 	hidden?: boolean;
 	running?: boolean;
 	burstCount?: number;
 	startedAt?: number;
 	durationMs?: number;
 	burstDurationMs?: number;
+	diffStats?: DiffStats;
 	result?: string;
 	isError?: boolean;
 	invalidate?: () => void;
@@ -53,6 +55,11 @@ type RunStats = {
 	commandCount: number;
 	otherCount: number;
 	failedCount: number;
+};
+
+type DiffStats = {
+	additions: number;
+	deletions: number;
 };
 
 type SummaryData = {
@@ -262,10 +269,8 @@ function previewFor(name: string, args: any): string {
 			}
 			return out;
 		}
-		case "write": {
-			const lines = typeof args?.content === "string" ? args.content.split("\n").length : 0;
-			return `write ${shortenPath(args?.path) || "..."}${lines ? ` (${lines} lines)` : ""}`;
-		}
+		case "write":
+			return `write ${shortenPath(args?.path) || "..."}`;
 		case "edit": {
 			const edits = Array.isArray(args?.edits) ? args.edits.length : 0;
 			return `edit ${shortenPath(args?.path) || "..."}${edits > 1 ? ` (${edits} edits)` : ""}`;
@@ -296,6 +301,67 @@ function previewFor(name: string, args: any): string {
 			return `${name} ${safeJson(args ?? {})}`;
 		}
 	}
+}
+
+function lineCount(text: string): number {
+	if (!text) return 0;
+	const lines = text.replace(/\r\n/g, "\n").split("\n");
+	if (lines[lines.length - 1] === "") lines.pop();
+	return lines.length;
+}
+
+function diffStatsFromArgs(args: any): DiffStats | undefined {
+	if (!Array.isArray(args?.edits)) return undefined;
+	let additions = 0;
+	let deletions = 0;
+	for (const edit of args.edits) {
+		if (typeof edit?.oldText !== "string" || typeof edit?.newText !== "string") return undefined;
+		deletions += lineCount(edit.oldText);
+		additions += lineCount(edit.newText);
+	}
+	return additions || deletions ? { additions, deletions } : undefined;
+}
+
+function diffStatsFromResult(result: any): DiffStats | undefined {
+	const diff = typeof result?.details?.diff === "string"
+		? result.details.diff
+		: typeof result?.details?.patch === "string"
+			? result.details.patch
+			: "";
+	if (!diff) return undefined;
+
+	let additions = 0;
+	let deletions = 0;
+	for (const line of diff.split(/\r?\n/)) {
+		if (line.startsWith("+++") || line.startsWith("---")) continue;
+		if (line.startsWith("+")) additions++;
+		else if (line.startsWith("-")) deletions++;
+	}
+	return additions || deletions ? { additions, deletions } : undefined;
+}
+
+function formatDiffStats(stats: DiffStats | undefined): string {
+	return stats ? `+${stats.additions}/-${stats.deletions}` : "";
+}
+
+function colorDiffStats(theme: Theme, stats: string): string {
+	const match = /^\+(\d+)\/(?:-)(\d+)$/.exec(stats);
+	if (!match) return theme.fg("toolDiffContext", `{${stats}}`);
+	return (
+		theme.fg("toolDiffContext", "{") +
+		theme.fg("toolDiffAdded", `+${match[1]}`) +
+		theme.fg("toolDiffContext", "/") +
+		theme.fg("toolDiffRemoved", `-${match[2]}`) +
+		theme.fg("toolDiffContext", "}")
+	);
+}
+
+function isEditTool(name: string): boolean {
+	return name.split(".").pop() === "edit";
+}
+
+function isWriteTool(name: string): boolean {
+	return name.split(".").pop() === "write";
 }
 
 function resultPreview(result: any, isPartial = false): string {
@@ -330,6 +396,9 @@ function setToolHidden(info: ToolInfo, hidden: boolean) {
 }
 
 function applyResult(info: ToolInfo, result: any, isError: boolean, isPartial: boolean) {
+	const diffStats = isEditTool(info.name) ? diffStatsFromResult(result) : undefined;
+	if (diffStats) info.diffStats = diffStats;
+	else if (isError) info.diffStats = undefined;
 	const suffix = resultPreview(result, isPartial);
 	if (suffix) info.result = suffix;
 	if (isError) {
@@ -465,7 +534,8 @@ function anchorCurrentThoughtTo(info: ToolInfo) {
 }
 
 function currentThoughtLine(toolCallId: string, theme: Theme): string {
-	if (!thoughtTickerEnabled() || state.thoughtAnchorId !== toolCallId || !state.currentThoughtHeading) return "";
+	const renderAnchorId = latestVisibleTool()?.id ?? state.thoughtAnchorId;
+	if (!thoughtTickerEnabled() || renderAnchorId !== toolCallId || !state.currentThoughtHeading) return "";
 	const prefix = "  ↳ ";
 	const budget = previewWidth((process.stdout.columns || 100) - prefix.length);
 	return theme.fg("dim", prefix) + theme.fg("thinkingText", limitPlain(state.currentThoughtHeading, budget));
@@ -480,6 +550,8 @@ function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => 
 	info.name = name;
 	info.args = args;
 	info.preview = previewFor(name, args);
+	info.writeLines = isWriteTool(name) && typeof args?.content === "string" ? lineCount(args.content) : undefined;
+	if (isEditTool(name) && !info.diffStats) info.diffStats = diffStatsFromArgs(args);
 	if (invalidate) info.invalidate = invalidate;
 	return info;
 }
@@ -592,8 +664,14 @@ function compactToolLine(
 
 	const isBurst = (info.burstCount ?? 1) > 1;
 	const durationText = formatDuration((isBurst ? (info.burstDurationMs ?? info.durationMs) : info.durationMs) ?? 0);
+	const editStats = isEditTool(info.name) ? formatDiffStats(info.diffStats) : "";
+	const writeStats =
+		isWriteTool(info.name) && !info.isError && info.writeLines !== undefined
+			? formatDiffStats({ additions: info.writeLines, deletions: 0 })
+			: "";
+	const stats = editStats || writeStats;
 	const inner = [info.result ? oneLine(info.result) : "", durationText].filter(Boolean).join(" · ");
-	const status = inner ? ` {${inner}}` : info.running ? " {running}" : "";
+	const status = stats ? ` {${stats}}` : inner ? ` {${inner}}` : info.running ? " {running}" : "";
 	const details = `${info.preview}${status}`;
 	const marker = statusMarker(theme, {
 		running: info.running,
@@ -603,7 +681,18 @@ function compactToolLine(
 	const color = info.isError ? "muted" : "dim";
 	const prefix = isBurst ? `${info.burstCount}× ` : "";
 	const budget = previewWidth((process.stdout.columns || 100) - prefix.length - MARKER_WIDTH);
-	return marker + theme.fg(color, prefix + limitPlain(details, budget));
+	const plainLine = prefix + limitPlain(details, budget);
+	const statsMarker = stats ? `{${stats}}` : "";
+	const statsIndex = statsMarker ? plainLine.lastIndexOf(statsMarker) : -1;
+	if (statsIndex >= 0) {
+		return (
+			marker +
+			theme.fg(color, plainLine.slice(0, statsIndex)) +
+			colorDiffStats(theme, stats) +
+			theme.fg(color, plainLine.slice(statsIndex + statsMarker.length))
+		);
+	}
+	return marker + theme.fg(color, plainLine);
 }
 
 function patchToolExecutionComponent() {
@@ -674,7 +763,7 @@ function patchToolExecutionComponent() {
 		}
 
 		this.selfRenderContainer.addChild({
-			render: (width: number) => [truncateToWidth(line, Math.max(0, width))],
+			render: (width: number) => [truncateToWidth(line, Math.max(0, width), theme.fg("dim", "…"))],
 			invalidate() {},
 		});
 		const thoughtLine = currentThoughtLine(this.toolCallId, theme);

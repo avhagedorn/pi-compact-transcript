@@ -14,7 +14,7 @@ What it does:
 
 - Highlights agent commentary with an accent-colored left rail and a blank line before the tools below it, preserving Markdown formatting. Final answers stay unframed.
 - Collapses every tool call/result into a dimmed one-line preview with a status diamond: blinking gray `◆` while running, green on success, red on failure. Failed previews retain higher-contrast text. Durations show at a second or longer.
-- Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`. Failed tools always get their own visible row.
+- Consecutive uses of the same tool coalesce into a single row, e.g. `◆ 4× read src/foo.ts {12 lines · 8s}`. Edit and write previews show git-style counts such as `{+3/-1}` and `{+42/-0}` with additions in green and deletions in red; no diff content is rendered. Failed tools always get their own visible row.
 - Each agent run ends with a one-line summary, e.g. `Read 6 files, edited 2, ran 3 commands, 1 failed · 42s`.
 - Suppresses `Thinking...` markers when thinking is hidden.
 - Works with custom/external tools from other extensions; unknown tools preview their most meaningful string argument (command, code, query, path, url, ...) instead of raw JSON.
@@ -82,7 +82,7 @@ Configuration is resolved in this order (highest priority first): current-sessio
 /compact-transcript status   # show current state
 ```
 
-Toggling re-renders the visible transcript immediately — no reload needed. Pre-0.5 mode names (`balanced`, `aggressive`, `debug`, `disabled`) are accepted as legacy aliases for `on`/`off`.
+Toggling re-renders the visible transcript immediately — no reload needed. Write stats are always shown for completed writes. Pre-0.5 mode names (`balanced`, `aggressive`, `debug`, `disabled`) are accepted as legacy aliases for `on`/`off`.
 
 ## Notes
 
