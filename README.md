@@ -69,13 +69,17 @@ Example:
 ```json
 {
   "enabled": true,
-  "summaryStyle": "quote"
+  "summaryStyle": "quote",
+  "highlightToolActions": true
 }
 ```
 
-`summaryStyle` controls the final activity summary: `"plain"` keeps the default muted line, while `"quote"` renders it as a Markdown blockquote. The default is `"plain"` for compatibility.
+| Option | Values | Default | Description |
+| --- | --- | --- | --- |
+| `summaryStyle` | `"plain"`, `"quote"` | `"plain"` | Renders activity summaries as muted text or Markdown blockquotes. |
+| `highlightToolActions` | `true`, `false` | `false` | Bolds tool names and shell commands for easier scanning. |
 
-Configuration is resolved in this order (highest priority first): current-session `/compact-transcript on|off`, trusted project configuration, user-wide configuration, then the built-in defaults (`enabled: true`, `summaryStyle: "plain"`). Project configuration is ignored unless Pi reports the project as trusted. Missing files, invalid JSON, and unsupported values are ignored and the next fallback is used. Session toggles remain stored in the existing session entries, and legacy mode values remain supported.
+Configuration is resolved in this order (highest priority first): current-session `/compact-transcript on|off`, trusted project configuration, user-wide configuration, then the built-in defaults (`enabled: true`, `summaryStyle: "plain"`, `highlightToolActions: false`). Project configuration is ignored unless Pi reports the project as trusted. Missing files, invalid JSON, and unsupported values are ignored and the next fallback is used. Session toggles remain stored in the existing session entries, and legacy mode values remain supported.
 
 ## Commands
 

@@ -31,6 +31,7 @@ type SummaryStyle = "plain" | "quote";
 type CompactTranscriptConfig = {
 	enabled: boolean;
 	summaryStyle: SummaryStyle;
+	highlightToolActions: boolean;
 };
 
 type ToolInfo = {
@@ -97,6 +98,7 @@ type RuntimeState = {
 const DEFAULT_CONFIG: CompactTranscriptConfig = {
 	enabled: true,
 	summaryStyle: "plain",
+	highlightToolActions: false,
 };
 
 const STATE_KEY = Symbol.for("pi-compact-transcript.state");
@@ -133,7 +135,10 @@ function normalizeConfig(input: unknown, fallback = DEFAULT_CONFIG): CompactTran
 	const summaryStyle = source.summaryStyle === "plain" || source.summaryStyle === "quote"
 		? source.summaryStyle
 		: fallback.summaryStyle;
-	return { enabled, summaryStyle };
+	const highlightToolActions = typeof source.highlightToolActions === "boolean"
+		? source.highlightToolActions
+		: fallback.highlightToolActions;
+	return { enabled, summaryStyle, highlightToolActions };
 }
 
 function readConfigFile(path: string, fallback: CompactTranscriptConfig): CompactTranscriptConfig | undefined {
@@ -692,6 +697,17 @@ function compactToolLine(
 	const actionEnd = Math.min(actionStart + action.length, plainLine.length);
 	const statsMarker = stats ? `{${stats}}` : "";
 	const statsIndex = statsMarker ? plainLine.lastIndexOf(statsMarker) : -1;
+	if (!state.config.highlightToolActions) {
+		if (statsIndex >= 0) {
+			return (
+				marker +
+				theme.fg(color, plainLine.slice(0, statsIndex)) +
+				colorDiffStats(theme, stats) +
+				theme.fg(color, plainLine.slice(statsIndex + statsMarker.length))
+			);
+		}
+		return marker + theme.fg(color, plainLine);
+	}
 	const beforeStatsEnd = statsIndex >= 0 ? statsIndex : plainLine.length;
 	return (
 		marker +
