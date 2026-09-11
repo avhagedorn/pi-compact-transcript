@@ -68,11 +68,14 @@ Example:
 
 ```json
 {
-  "enabled": false
+  "enabled": true,
+  "summaryStyle": "quote"
 }
 ```
 
-Configuration is resolved in this order (highest priority first): current-session `/compact-transcript on|off`, trusted project configuration, user-wide configuration, then the built-in default (`enabled: true`). Project configuration is ignored unless Pi reports the project as trusted. Missing files, invalid JSON, and unsupported values are ignored and the next fallback is used. Session toggles remain stored in the existing session entries, and legacy mode values remain supported.
+`summaryStyle` controls the final activity summary: `"plain"` keeps the default muted line, while `"quote"` renders it as a Markdown blockquote. The default is `"plain"` for compatibility.
+
+Configuration is resolved in this order (highest priority first): current-session `/compact-transcript on|off`, trusted project configuration, user-wide configuration, then the built-in defaults (`enabled: true`, `summaryStyle: "plain"`). Project configuration is ignored unless Pi reports the project as trusted. Missing files, invalid JSON, and unsupported values are ignored and the next fallback is used. Session toggles remain stored in the existing session entries, and legacy mode values remain supported.
 
 ## Commands
 

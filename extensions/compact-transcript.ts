@@ -3,6 +3,7 @@ import {
 	AssistantMessageComponent,
 	CONFIG_DIR_NAME,
 	getAgentDir,
+	getMarkdownTheme,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Markdown, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
@@ -25,8 +26,11 @@ const BLINK_INTERVAL_MS = 400;
 const MARKER_WIDTH = 2;
 const COMMENTARY_RAIL_WIDTH = 2;
 
+type SummaryStyle = "plain" | "quote";
+
 type CompactTranscriptConfig = {
 	enabled: boolean;
+	summaryStyle: SummaryStyle;
 };
 
 type ToolInfo = {
@@ -92,6 +96,7 @@ type RuntimeState = {
 
 const DEFAULT_CONFIG: CompactTranscriptConfig = {
 	enabled: true,
+	summaryStyle: "plain",
 };
 
 const STATE_KEY = Symbol.for("pi-compact-transcript.state");
@@ -125,21 +130,17 @@ function normalizeConfig(input: unknown, fallback = DEFAULT_CONFIG): CompactTran
 		// Pre-0.5 config persisted a mode string instead of an enabled flag.
 		enabled = source.mode !== "disabled" && source.mode !== "off";
 	}
-	return { enabled };
+	const summaryStyle = source.summaryStyle === "plain" || source.summaryStyle === "quote"
+		? source.summaryStyle
+		: fallback.summaryStyle;
+	return { enabled, summaryStyle };
 }
 
-function readConfigFile(path: string): CompactTranscriptConfig | undefined {
+function readConfigFile(path: string, fallback: CompactTranscriptConfig): CompactTranscriptConfig | undefined {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-
-		const source = parsed as Record<string, unknown>;
-		if (typeof source.enabled === "boolean") return { enabled: source.enabled };
-		if (typeof source.mode === "string") {
-			// Accept the old mode spelling in extension config files too.
-			return { enabled: source.mode !== "disabled" && source.mode !== "off" };
-		}
-		return undefined;
+		return normalizeConfig(parsed, fallback);
 	} catch {
 		// Missing, unreadable, or malformed config files use the next fallback.
 		return undefined;
@@ -148,13 +149,16 @@ function readConfigFile(path: string): CompactTranscriptConfig | undefined {
 
 function loadConfigFromFiles(ctx: ExtensionContext): CompactTranscriptConfig {
 	let nextConfig = { ...DEFAULT_CONFIG };
-	const userConfig = readConfigFile(join(getAgentDir(), "compact-transcript.json"));
+	const userConfig = readConfigFile(join(getAgentDir(), "compact-transcript.json"), nextConfig);
 	if (userConfig) nextConfig = userConfig;
 
 	// Project-local configuration is only meaningful after Pi has trusted the
 	// project. Never inspect this path for an untrusted project.
 	if (ctx.isProjectTrusted()) {
-		const projectConfig = readConfigFile(join(ctx.cwd, CONFIG_DIR_NAME, "compact-transcript.json"));
+		const projectConfig = readConfigFile(
+			join(ctx.cwd, CONFIG_DIR_NAME, "compact-transcript.json"),
+			nextConfig,
+		);
 		if (projectConfig) nextConfig = projectConfig;
 	}
 
@@ -179,6 +183,7 @@ function getState(): RuntimeState {
 	const runtimeState = globalWithState[STATE_KEY]!;
 	// /reload keeps the global object alive; initialize fields added by newer
 	// versions when an older extension instance created the state object.
+	runtimeState.config = normalizeConfig(runtimeState.config);
 	runtimeState.thinkingHidden ??= true;
 	return runtimeState;
 }
@@ -1084,7 +1089,9 @@ function checkAndNotifyRecommendedSettings(ctx: ExtensionContext) {
 
 function setEnabled(enabled: boolean, pi: ExtensionAPI, ctx: ExtensionContext) {
 	state.config.enabled = enabled;
-	pi.appendEntry(CONFIG_ENTRY_TYPE, { ...state.config });
+	// Session entries represent only the command's enabled override; file-only
+	// settings such as summaryStyle should continue to follow configuration.
+	pi.appendEntry(CONFIG_ENTRY_TYPE, { enabled });
 	refreshTranscript();
 	ctx.ui.notify(`Compact transcript: ${enabled ? "on" : "off"}`, "info");
 }
@@ -1135,6 +1142,9 @@ export default function compactTranscript(pi: ExtensionAPI) {
 	pi.registerEntryRenderer<SummaryData>(SUMMARY_ENTRY_TYPE, (entry, _options, theme) => {
 		const line = summaryLine(normalizeSummary(entry.data));
 		if (!line) return undefined;
+		if (state.config.summaryStyle === "quote") {
+			return new Markdown(`> ${line}`, 0, 0, getMarkdownTheme());
+		}
 		return new Text(theme.fg("muted", line), 0, 0);
 	});
 
