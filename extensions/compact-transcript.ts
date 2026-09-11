@@ -682,17 +682,20 @@ function compactToolLine(
 	const prefix = isBurst ? `${info.burstCount}× ` : "";
 	const budget = previewWidth((process.stdout.columns || 100) - prefix.length - MARKER_WIDTH);
 	const plainLine = prefix + limitPlain(details, budget);
+	const action = info.name === "bash" ? /^\$\s+\S+/.exec(info.preview)?.[0] ?? "$" : info.name;
+	const actionStart = prefix.length;
+	const actionEnd = Math.min(actionStart + action.length, plainLine.length);
 	const statsMarker = stats ? `{${stats}}` : "";
 	const statsIndex = statsMarker ? plainLine.lastIndexOf(statsMarker) : -1;
-	if (statsIndex >= 0) {
-		return (
-			marker +
-			theme.fg(color, plainLine.slice(0, statsIndex)) +
-			colorDiffStats(theme, stats) +
-			theme.fg(color, plainLine.slice(statsIndex + statsMarker.length))
-		);
-	}
-	return marker + theme.fg(color, plainLine);
+	const beforeStatsEnd = statsIndex >= 0 ? statsIndex : plainLine.length;
+	return (
+		marker +
+		theme.fg(color, plainLine.slice(0, actionStart)) +
+		theme.fg("toolTitle", theme.bold(plainLine.slice(actionStart, actionEnd))) +
+		theme.fg(color, plainLine.slice(actionEnd, beforeStatsEnd)) +
+		(statsIndex >= 0 ? colorDiffStats(theme, stats) : "") +
+		theme.fg(color, statsIndex >= 0 ? plainLine.slice(statsIndex + statsMarker.length) : "")
+	);
 }
 
 function patchToolExecutionComponent() {
