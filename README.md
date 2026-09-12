@@ -1,6 +1,8 @@
-# pi-compact-transcript
+# pi-compact-transcript 
 
-A compact transcript extension for [pi](https://pi.dev).
+![NPM Downloads](https://img.shields.io/npm/d18m/pi-compact-transcript)
+
+A compact transcript extension for [pi](https://pi.dev). 
 
 ## With the extension
 
