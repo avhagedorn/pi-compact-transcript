@@ -17,13 +17,7 @@ const STATUS_KEY = "compact-transcript";
 const CONFIG_ENTRY_TYPE = "compact-transcript-config";
 const SUMMARY_ENTRY_TYPE = "compact-transcript-summary";
 
-const MIN_PREVIEW_WIDTH = 20;
-const MAX_PREVIEW_WIDTH = 104;
-// Leave room for pi's row gutter/padding so compact lines never wrap.
-const PREVIEW_MARGIN = 6;
 const BLINK_INTERVAL_MS = 400;
-// Status marker is two cells wide ("◆ ").
-const MARKER_WIDTH = 2;
 const COMMENTARY_RAIL_WIDTH = 2;
 
 type SummaryStyle = "plain" | "quote";
@@ -213,16 +207,6 @@ function oneLine(value: unknown): string {
 	return String(value ?? "")
 		.replace(/\s+/g, " ")
 		.trim();
-}
-
-function previewWidth(base = process.stdout.columns || 100): number {
-	return Math.max(MIN_PREVIEW_WIDTH, Math.min(MAX_PREVIEW_WIDTH, base - PREVIEW_MARGIN));
-}
-
-function limitPlain(text: string, max = previewWidth()): string {
-	const clean = oneLine(text);
-	if (clean.length <= max) return clean;
-	return `${clean.slice(0, Math.max(0, max - 1))}…`;
 }
 
 function quote(s: string): string {
@@ -547,8 +531,7 @@ function currentThoughtLine(toolCallId: string, theme: Theme): string {
 	const renderAnchorId = latestVisibleTool()?.id ?? state.thoughtAnchorId;
 	if (!thoughtTickerEnabled() || renderAnchorId !== toolCallId || !state.currentThoughtHeading) return "";
 	const prefix = "  ↳ ";
-	const budget = previewWidth((process.stdout.columns || 100) - prefix.length);
-	return theme.fg("dim", prefix) + theme.fg("thinkingText", limitPlain(state.currentThoughtHeading, budget));
+	return theme.fg("dim", prefix) + theme.fg("thinkingText", state.currentThoughtHeading);
 }
 
 function upsertToolInfo(id: string, name: string, args: any, invalidate?: () => void): ToolInfo {
@@ -690,8 +673,7 @@ function compactToolLine(
 	});
 	const color = info.isError ? "muted" : "dim";
 	const prefix = isBurst ? `${info.burstCount}× ` : "";
-	const budget = previewWidth((process.stdout.columns || 100) - prefix.length - MARKER_WIDTH);
-	const plainLine = prefix + limitPlain(details, budget);
+	const plainLine = prefix + oneLine(details);
 	const action = info.name === "bash" ? /^\$\s+\S+/.exec(info.preview)?.[0] ?? "$" : info.name;
 	const actionStart = prefix.length;
 	const actionEnd = Math.min(actionStart + action.length, plainLine.length);
@@ -791,7 +773,12 @@ function patchToolExecutionComponent() {
 			invalidate() {},
 		});
 		const thoughtLine = currentThoughtLine(this.toolCallId, theme);
-		if (thoughtLine) this.selfRenderContainer.addChild(new Text(thoughtLine, 0, 0));
+		if (thoughtLine) {
+			this.selfRenderContainer.addChild({
+				render: (width: number) => [truncateToWidth(thoughtLine, Math.max(0, width), theme.fg("dim", "…"))],
+				invalidate() {},
+			});
+		}
 	};
 
 	proto.render = function patchedRender(width: number) {
