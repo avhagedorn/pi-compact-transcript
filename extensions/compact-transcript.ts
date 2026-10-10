@@ -743,6 +743,7 @@ function patchToolExecutionComponent() {
 		for (const image of this.imageComponents ?? []) this.removeChild?.(image);
 		for (const spacer of this.imageSpacers ?? []) this.removeChild?.(spacer);
 		this.imageComponents = [];
+		this.imageSources = [];
 		this.imageSpacers = [];
 
 		const theme = state.currentTheme;
