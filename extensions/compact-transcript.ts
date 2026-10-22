@@ -701,6 +701,25 @@ function compactToolLine(
 	);
 }
 
+// A one-line component that truncates once per width. Every transcript row is
+// rendered on every frame, so re-truncating ANSI-styled text each time adds up.
+function cachedLine(text: string, ellipsis: string): Component {
+	let cachedWidth = -1;
+	let cached: string[] = [];
+	return {
+		render(width: number) {
+			if (width !== cachedWidth) {
+				cachedWidth = width;
+				cached = [truncateToWidth(text, Math.max(0, width), ellipsis)];
+			}
+			return cached;
+		},
+		invalidate() {
+			cachedWidth = -1;
+		},
+	};
+}
+
 function patchToolExecutionComponent() {
 	const proto = ToolExecutionComponent.prototype as any;
 	if (typeof proto.updateDisplay !== "function" || typeof proto.render !== "function") return;
@@ -769,16 +788,10 @@ function patchToolExecutionComponent() {
 			return;
 		}
 
-		this.selfRenderContainer.addChild({
-			render: (width: number) => [truncateToWidth(line, Math.max(0, width), theme.fg("dim", "…"))],
-			invalidate() {},
-		});
+		this.selfRenderContainer.addChild(cachedLine(line, theme.fg("dim", "…")));
 		const thoughtLine = currentThoughtLine(this.toolCallId, theme);
 		if (thoughtLine) {
-			this.selfRenderContainer.addChild({
-				render: (width: number) => [truncateToWidth(thoughtLine, Math.max(0, width), theme.fg("dim", "…"))],
-				invalidate() {},
-			});
+			this.selfRenderContainer.addChild(cachedLine(thoughtLine, theme.fg("dim", "…")));
 		}
 	};
 
@@ -820,13 +833,29 @@ class CommentaryRail implements Component {
 		this.content = content;
 	}
 
+	// Reuse the railed lines while the width, rail and the content's (cached)
+	// line array are unchanged.
+	private cachedWidth = -1;
+	private cachedRail = "";
+	private cachedSource?: string[];
+	private cachedLines: string[] = [];
+
 	render(width: number): string[] {
 		if (width <= COMMENTARY_RAIL_WIDTH) return this.content.render(width);
 		const rail = state.currentTheme?.fg("accent", "│ ") ?? "│ ";
-		return this.content.render(width - COMMENTARY_RAIL_WIDTH).map((line) => rail + line);
+		const source = this.content.render(width - COMMENTARY_RAIL_WIDTH);
+		if (width !== this.cachedWidth || rail !== this.cachedRail || source !== this.cachedSource) {
+			this.cachedWidth = width;
+			this.cachedRail = rail;
+			this.cachedSource = source;
+			this.cachedLines = source.map((line) => rail + line);
+		}
+		return this.cachedLines;
 	}
 
 	invalidate(): void {
+		this.cachedWidth = -1;
+		this.cachedSource = undefined;
 		this.content.invalidate();
 	}
 }
