@@ -29,6 +29,18 @@ test("hidden thinking is removed entirely, including pi's placeholder", async ()
 	assert.deepEqual(render(thinkingOnly), [], "a message with only thinking renders nothing");
 });
 
+test("streamed updates with hidden thinking reuse the text Markdown", async () => {
+	const h = harness();
+	await h.startSession();
+	const component = new AssistantMessageComponent(undefined, true) as any;
+	const textMarkdown = () => component.contentContainer.children.filter((child: any) => child.constructor.name === "Markdown");
+	component.updateContent(message({ type: "thinking", thinking: "Plan" }, { type: "text", text: "First" }), true);
+	const [first] = textMarkdown();
+	component.updateContent(message({ type: "thinking", thinking: "Plan" }, { type: "text", text: "First and more" }), true);
+	assert.deepEqual(textMarkdown(), [first], "the same Markdown renders the grown text");
+	assert.match(render(component).join("\n"), /First and more/);
+});
+
 test("commentary before tool calls gets the rail; final answers do not", async () => {
 	const h = harness();
 	await h.startSession();
