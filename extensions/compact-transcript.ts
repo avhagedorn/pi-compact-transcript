@@ -912,6 +912,12 @@ function frameCommentary(component: any, message: any): void {
 	if (framed) component.contentContainer.addChild(new Spacer(1));
 }
 
+// Text Markdown per assistant component, reused across streamed updates as pi
+// does, so an update re-renders only the blocks that changed. Markdown takes
+// its padding and theme at construction, so a change to either rebuilds it.
+type TextSlot = { markdown: Markdown; outputPad: number; markdownTheme: unknown };
+const assistantTextSlots = new WeakMap<object, TextSlot[]>();
+
 function patchAssistantMessageComponent() {
 	const proto = AssistantMessageComponent.prototype as any;
 	if (typeof proto.updateContent !== "function") return;
@@ -952,20 +958,33 @@ function patchAssistantMessageComponent() {
 		state.currentBurst = [];
 
 		this.contentContainer.addChild(new Spacer(1));
+		const previousSlots = assistantTextSlots.get(this) ?? [];
+		const slots: TextSlot[] = [];
 		for (const content of texts) {
-			this.contentContainer.addChild(
-				new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-					transform: (markdown: string, availableWidth: number) =>
-						applyMarkdownTransformers(
-							markdown,
-							(this as any).markdownTransformers,
-							"assistant",
-							(this as any).isStreaming ?? false,
-							availableWidth,
-						),
-				}),
-			);
+			const text = content.text.trim();
+			let slot = previousSlots[slots.length];
+			if (slot && slot.outputPad === this.outputPad && slot.markdownTheme === this.markdownTheme) {
+				slot.markdown.setText(text);
+			} else {
+				slot = {
+					markdown: new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
+						transform: (markdown: string, availableWidth: number) =>
+							applyMarkdownTransformers(
+								markdown,
+								(this as any).markdownTransformers,
+								"assistant",
+								(this as any).isStreaming ?? false,
+								availableWidth,
+							),
+					}),
+					outputPad: this.outputPad,
+					markdownTheme: this.markdownTheme,
+				};
+			}
+			slots.push(slot);
+			this.contentContainer.addChild(slot.markdown);
 		}
+		assistantTextSlots.set(this, slots);
 		frameCommentary(this, message);
 	};
 
