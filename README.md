@@ -21,6 +21,7 @@ What it does:
 - Suppresses `Thinking...` markers when thinking is hidden.
 - Works with custom/external tools from other extensions; unknown tools preview their most meaningful string argument (command, code, query, path, url, ...) instead of raw JSON.
 - Expanded tool output still uses pi's original renderer, so pi's normal tool expansion works when details matter.
+- Tool results containing images also use pi's original renderer, preserving inline previews and pi's image settings. They stay separate from grouped tool calls; text-only results remain compact.
 
 ## Install
 
