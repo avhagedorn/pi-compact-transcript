@@ -411,6 +411,11 @@ function applyResult(info: ToolInfo, result: any, isError: boolean, isPartial: b
 	if (suffix) info.result = suffix;
 	// A final result without text replaces the "running" placeholder.
 	else if (!isPartial) info.result = undefined;
+	if (result?.content?.some((part: any) => part.type === "image")) {
+		splitBurstAtFailure(info);
+		info.burstCount = 1;
+		setToolHidden(info, false);
+	}
 	if (isError) {
 		info.isError = true;
 		// A failed tool always gets its own visible row, even if a burst had
@@ -773,7 +778,8 @@ function patchToolExecutionComponent() {
 		const info = upsertToolInfo(this.toolCallId, this.toolName, this.args, invalidate);
 		applyResult(info, this.result, this.result?.isError ?? false, this.isPartial);
 
-		if (!isEnabled() || this.expanded) {
+		const hasImages = this.result?.content?.some((part: any) => part.type === "image");
+		if (!isEnabled() || this.expanded || hasImages) {
 			setToolHidden(info, false);
 			this.__compactTranscriptForceSelf = false;
 			this.__compactTranscriptHidden = false;
